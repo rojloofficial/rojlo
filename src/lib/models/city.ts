@@ -1,0 +1,638 @@
+import { cache } from "react";
+import { readStore, writeStore } from "../persist";
+import { cityPlaces } from "../places";
+import { invalidateLocalAreasCache } from "./localArea";
+import { slugify } from "../utils/string";
+
+export type CityRecord = {
+  _id?: string;
+  name: string;
+  slug: string;
+  state?: string;
+  region: string;
+  country?: string;
+  famousFood: string;
+  seoDescription: string;
+  createdAt: Date | string;
+  updatedAt?: Date | string;
+};
+
+export async function listCities(): Promise<CityRecord[]> {
+  const store = await readStore();
+  const deleted = new Set(
+    (store.deletedCities ?? []).map((s: string) => s.trim().toLowerCase())
+  );
+  const deletedStates = new Set(
+    (store.deletedStates ?? []).map((s: string) => s.trim().toLowerCase())
+  );
+  const cities = (store.cities ?? []) as unknown as CityRecord[];
+
+  const result: CityRecord[] = [];
+  const seen = new Set<string>();
+
+  for (const c of cities) {
+    if (!c.name) continue;
+    const slug = c.slug || slugify(c.name);
+    const stateName = (c.state ?? "").trim().toLowerCase();
+    const stateSlug = slugify(c.state ?? "");
+
+    // Skip if city slug or name is deleted
+    if (
+      deleted.has(slug.toLowerCase()) ||
+      deleted.has(c.name.trim().toLowerCase())
+    ) continue;
+    // Skip if state is deleted
+    if (stateName && (deletedStates.has(stateName) || deletedStates.has(stateSlug))) {
+      continue;
+    }
+
+    // Deduplicate by composite key: state + slug
+    const uniqueKey = `${stateSlug}:${slug.toLowerCase()}`;
+    if (seen.has(uniqueKey)) continue;
+    seen.add(uniqueKey);
+
+    result.push({
+      ...c,
+      _id: c._id || `mem_city_${slug}`,
+      slug,
+    });
+  }
+
+  return result.sort((a, b) => {
+    const ta = new Date(a.createdAt).getTime();
+    const tb = new Date(b.createdAt).getTime();
+    return tb - ta;
+  });
+}
+
+export async function isCityDeleted(slug: string): Promise<boolean> {
+  const store = await readStore();
+  const sLower = slug.trim().toLowerCase();
+  return (store.deletedCities ?? []).some(
+    (del: string) => del.trim().toLowerCase() === sLower
+  );
+}
+
+export const getCityBySlug = cache(async function (
+  slug: string
+): Promise<CityRecord | null> {
+  const store = await readStore();
+  const deletedStates = new Set(
+    (store.deletedStates ?? []).map((s: string) => s.trim().toLowerCase())
+  );
+
+  const cleanSlug = slug.trim().toLowerCase();
+  if (await isCityDeleted(cleanSlug)) return null;
+
+  // 1. Check custom cities first (allows custom updates/additions to override static)
+  const customCities = await listCities();
+  const custom = customCities.find(
+    (c) =>
+      c.slug.toLowerCase() === cleanSlug ||
+      slugify(c.name) === cleanSlug ||
+      c.name.trim().toLowerCase() === cleanSlug ||
+      (cleanSlug === "purnea" && c.slug.toLowerCase() === "purnia") ||
+      (cleanSlug === "chandigarh-city" && c.slug.toLowerCase() === "chandigarh") ||
+      (cleanSlug === "mahesana" && c.slug.toLowerCase() === "mehsana") ||
+      (cleanSlug === "vasco-da-gama" && c.slug.toLowerCase() === "vasco") ||
+      (cleanSlug === "bardez" && c.slug.toLowerCase() === "mapusa") ||
+      (cleanSlug === "tiswadi" && c.slug.toLowerCase() === "panaji") ||
+      (cleanSlug === "salcete" && c.slug.toLowerCase() === "margao") ||
+      (cleanSlug === "sattari" && c.slug.toLowerCase() === "valpoi") ||
+      (cleanSlug === "lahaul-spiti" && c.slug.toLowerCase() === "lahaul-and-spiti") ||
+      (cleanSlug === "bokaro-steel-city" && c.slug.toLowerCase() === "bokaro") ||
+      (cleanSlug === "belagavi" && c.slug.toLowerCase() === "belgaum") ||
+      (cleanSlug === "ballari" && c.slug.toLowerCase() === "bellary") ||
+      (cleanSlug === "vijayapura" && c.slug.toLowerCase() === "bijapur") ||
+      (cleanSlug === "kalaburagi" && c.slug.toLowerCase() === "gulbarga") ||
+      (cleanSlug === "shivamogga" && c.slug.toLowerCase() === "shimoga") ||
+      (cleanSlug === "tumakuru" && c.slug.toLowerCase() === "tumkur") ||
+      (cleanSlug === "hubballi-dharwad" && c.slug.toLowerCase() === "hubli") ||
+      (cleanSlug === "hubballi" && c.slug.toLowerCase() === "hubli") ||
+      (cleanSlug === "trivandrum" && c.slug.toLowerCase() === "thiruvananthapuram") ||
+      (cleanSlug === "cochin" && c.slug.toLowerCase() === "kochi") ||
+      (cleanSlug === "calicut" && c.slug.toLowerCase() === "kozhikode") ||
+      (cleanSlug === "alleppey" && c.slug.toLowerCase() === "alappuzha") ||
+      (cleanSlug === "quilon" && c.slug.toLowerCase() === "kollam") ||
+      (cleanSlug === "palghat" && c.slug.toLowerCase() === "palakkad") ||
+      (cleanSlug === "cannannore" && c.slug.toLowerCase() === "kannur") ||
+      (cleanSlug === "cannanore" && c.slug.toLowerCase() === "kannur") ||
+      (cleanSlug === "trichur" && c.slug.toLowerCase() === "thrissur") ||
+      (cleanSlug === "chhatrapati-sambhajinagar" && c.slug.toLowerCase() === "aurangabad") ||
+      (cleanSlug === "sambhajinagar" && c.slug.toLowerCase() === "aurangabad") ||
+      (cleanSlug === "ahilyanagar" && c.slug.toLowerCase() === "ahmednagar") ||
+      (cleanSlug === "dharashiv" && c.slug.toLowerCase() === "osmanabad") ||
+      (cleanSlug === "bombay" && c.slug.toLowerCase() === "mumbai") ||
+      (cleanSlug === "poona" && c.slug.toLowerCase() === "pune") ||
+      (cleanSlug === "ferozepur" && c.slug.toLowerCase() === "firozpur") ||
+      (cleanSlug === "rupnagar" && c.slug.toLowerCase() === "ropar") ||
+      (cleanSlug === "sas-nagar" && c.slug.toLowerCase() === "mohali") ||
+      (cleanSlug === "sahibzada-ajit-singh-nagar" && c.slug.toLowerCase() === "mohali") ||
+      (cleanSlug === "sbs-nagar" && c.slug.toLowerCase() === "shaheed-bhagat-singh-nagar") ||
+      (cleanSlug === "nawanshahr" && c.slug.toLowerCase() === "shaheed-bhagat-singh-nagar") ||
+      (cleanSlug === "sri-ganganagar" && c.slug.toLowerCase() === "ganganagar")
+  );
+  if (custom) {
+    if (
+      custom.state &&
+      (deletedStates.has(custom.state.trim().toLowerCase()) ||
+        deletedStates.has(slugify(custom.state)))
+    ) {
+      return null;
+    }
+    return custom;
+  }
+
+  // 2. Check static cities
+  const staticCity = cityPlaces.find(
+    (c) =>
+      c.slug === slug ||
+      c.slug.toLowerCase() === cleanSlug ||
+      slugify(c.name) === cleanSlug ||
+      (cleanSlug === "trivandrum" && c.slug.toLowerCase() === "thiruvananthapuram") ||
+      (cleanSlug === "cochin" && c.slug.toLowerCase() === "kochi") ||
+      (cleanSlug === "calicut" && c.slug.toLowerCase() === "kozhikode") ||
+      (cleanSlug === "alleppey" && c.slug.toLowerCase() === "alappuzha") ||
+      (cleanSlug === "quilon" && c.slug.toLowerCase() === "kollam") ||
+      (cleanSlug === "palghat" && c.slug.toLowerCase() === "palakkad") ||
+      (cleanSlug === "cannannore" && c.slug.toLowerCase() === "kannur") ||
+      (cleanSlug === "cannanore" && c.slug.toLowerCase() === "kannur") ||
+      (cleanSlug === "trichur" && c.slug.toLowerCase() === "thrissur") ||
+      (cleanSlug === "chhatrapati-sambhajinagar" && c.slug.toLowerCase() === "aurangabad") ||
+      (cleanSlug === "sambhajinagar" && c.slug.toLowerCase() === "aurangabad") ||
+      (cleanSlug === "ahilyanagar" && c.slug.toLowerCase() === "ahmednagar") ||
+      (cleanSlug === "dharashiv" && c.slug.toLowerCase() === "osmanabad") ||
+      (cleanSlug === "bombay" && c.slug.toLowerCase() === "mumbai") ||
+      (cleanSlug === "poona" && c.slug.toLowerCase() === "pune") ||
+      (cleanSlug === "ferozepur" && c.slug.toLowerCase() === "firozpur") ||
+      (cleanSlug === "rupnagar" && c.slug.toLowerCase() === "ropar") ||
+      (cleanSlug === "sas-nagar" && c.slug.toLowerCase() === "mohali") ||
+      (cleanSlug === "sahibzada-ajit-singh-nagar" && c.slug.toLowerCase() === "mohali") ||
+      (cleanSlug === "sbs-nagar" && c.slug.toLowerCase() === "shaheed-bhagat-singh-nagar") ||
+      (cleanSlug === "nawanshahr" && c.slug.toLowerCase() === "shaheed-bhagat-singh-nagar") ||
+      (cleanSlug === "sri-ganganagar" && c.slug.toLowerCase() === "ganganagar")
+  );
+  if (staticCity) {
+    if (
+      staticCity.state &&
+      (deletedStates.has(staticCity.state.trim().toLowerCase()) ||
+        deletedStates.has(slugify(staticCity.state)))
+    ) {
+      return null;
+    }
+    return {
+      _id: staticCity.slug,
+      name: staticCity.name,
+      slug: staticCity.slug,
+      state: staticCity.state,
+      region: staticCity.region,
+      famousFood: staticCity.famousFood,
+      seoDescription: staticCity.seoDescription,
+      createdAt: new Date(0),
+    };
+  }
+
+  return null;
+});
+
+export async function getCustomCityBySlug(
+  slug: string
+): Promise<CityRecord | null> {
+  return (
+    (await listCities()).find(
+      (c) => c.slug.toLowerCase() === slug.toLowerCase()
+    ) ?? null
+  );
+}
+
+export type CombinedCity = CityRecord & { source: "Static" | "Custom" };
+
+let cachedCombinedCities: CombinedCity[] | null = null;
+let cachedCombinedCitiesExpiresAt = 0;
+const COMBINED_CITIES_CACHE_TTL_MS = 10_000; // 10 seconds
+
+export function invalidateCityCache(): void {
+  cachedCombinedCities = null;
+  cachedCombinedCitiesExpiresAt = 0;
+}
+
+export async function listAllCities(forceFresh = false): Promise<CombinedCity[]> {
+  const now = Date.now();
+  if (!forceFresh && cachedCombinedCities && now < cachedCombinedCitiesExpiresAt) {
+    return cachedCombinedCities;
+  }
+
+  const store = await readStore(forceFresh);
+  const deleted = new Set(
+    (store.deletedCities ?? []).map((s: string) => s.trim().toLowerCase())
+  );
+  const deletedStates = new Set(
+    (store.deletedStates ?? []).map((s: string) => s.trim().toLowerCase())
+  );
+
+  const customCities: CombinedCity[] = (await listCities()).map((c) => ({
+    ...c,
+    source: "Custom" as const,
+  }));
+  const customCityKeys = new Set(
+    customCities.map(
+      (c) => `${slugify(c.state ?? "")}:${c.slug.toLowerCase()}`
+    )
+  );
+
+  const staticCities: CombinedCity[] = cityPlaces
+    .filter((c) => {
+      const slug = c.slug.toLowerCase();
+      const stateName = (c.state ?? "").trim().toLowerCase();
+      const stateSlug = slugify(c.state ?? "");
+      if (deleted.has(slug) || deleted.has(c.name.trim().toLowerCase())) return false;
+      if (
+        stateName &&
+        (deletedStates.has(stateName) || deletedStates.has(stateSlug))
+      ) {
+        return false;
+      }
+      const key = `${stateSlug}:${slug}`;
+      if (customCityKeys.has(key) || customCities.some((cc) => cc.slug.toLowerCase() === slug)) return false;
+      return true;
+    })
+    .map((c) => ({
+      _id: c.slug,
+      name: c.name,
+      slug: c.slug,
+      state: c.state,
+      region: c.region,
+      famousFood: c.famousFood,
+      seoDescription: c.seoDescription,
+      createdAt: new Date(0),
+      source: "Static" as const,
+    }));
+
+  const seenSlugs = new Set<string>();
+  const deduped: CombinedCity[] = [];
+  for (const c of [...customCities, ...staticCities]) {
+    const slug = c.slug.toLowerCase().trim();
+    if (!slug || seenSlugs.has(slug)) continue;
+    seenSlugs.add(slug);
+    deduped.push(c);
+  }
+
+  cachedCombinedCities = deduped;
+  cachedCombinedCitiesExpiresAt = now + COMBINED_CITIES_CACHE_TTL_MS;
+  return deduped;
+}
+
+export async function createCity(data: {
+  name: string;
+  state?: string;
+  region: string;
+  country?: string;
+  famousFood: string;
+  seoDescription: string;
+}): Promise<CityRecord> {
+  const store = await readStore();
+  const trimmedName = data.name.trim();
+  const trimmedState = data.state?.trim() ?? "";
+  const baseSlug = slugify(trimmedName) || `city-${Date.now()}`;
+
+  // If city in another state already took baseSlug, disambiguate with state slug
+  const slugTakenByOtherState =
+    (store.cities as unknown as CityRecord[]).some(
+      (c) =>
+        c.slug === baseSlug &&
+        c.state?.trim().toLowerCase() !== trimmedState.toLowerCase()
+    ) ||
+    cityPlaces.some(
+      (c) =>
+        c.slug === baseSlug &&
+        c.state?.trim().toLowerCase() !== trimmedState.toLowerCase()
+    );
+
+  const slug =
+    slugTakenByOtherState && trimmedState
+      ? `${baseSlug}-${slugify(trimmedState)}`
+      : baseSlug;
+
+  // Un-delete city from deletedCities if it was deleted
+  const slugLower = slug.toLowerCase();
+  const baseLower = baseSlug.toLowerCase();
+  store.deletedCities = (store.deletedCities ?? []).filter((s: string) => {
+    const val = s.trim().toLowerCase();
+    return val !== slugLower && val !== baseLower;
+  });
+
+  // Un-delete state if it was deleted
+  if (trimmedState) {
+    const sNameLower = trimmedState.toLowerCase();
+    const sSlugLower = slugify(trimmedState);
+    const sClean = sNameLower.replace(/[^a-z0-9]/g, "");
+    store.deletedStates = (store.deletedStates ?? []).filter((s: string) => {
+      const val = s.trim().toLowerCase();
+      const valClean = val.replace(/[^a-z0-9]/g, "");
+      return val !== sNameLower && val !== sSlugLower && valClean !== sClean;
+    });
+  }
+
+  const cities = store.cities as unknown as CityRecord[];
+
+  // Check if same city already exists under the same state -> update in place
+  const existingSameStateIndex = cities.findIndex(
+    (c) =>
+      c.state?.trim().toLowerCase() === trimmedState.toLowerCase() &&
+      (c.slug === slug ||
+        c.slug === baseSlug ||
+        c.name.trim().toLowerCase() === trimmedName.toLowerCase())
+  );
+
+  if (existingSameStateIndex >= 0) {
+    const existing = cities[existingSameStateIndex];
+    existing.name = trimmedName;
+    existing.slug = slug;
+    existing.state = trimmedState;
+    existing.region = data.region.trim() || trimmedState || "India";
+    existing.country = data.country?.trim() ?? "India";
+    existing.famousFood = data.famousFood.trim();
+    existing.seoDescription = data.seoDescription.trim();
+    existing.createdAt = new Date();
+    await writeStore(store);
+    invalidateCityCache();
+    invalidateLocalAreasCache();
+    return existing;
+  }
+
+  const city: CityRecord = {
+    _id: `mem_city_${store.cities.length + 1}_${Date.now()}`,
+    name: trimmedName,
+    slug,
+    state: trimmedState,
+    region: data.region.trim() || trimmedState || "India",
+    country: data.country?.trim() || "India",
+    famousFood: data.famousFood.trim(),
+    seoDescription: data.seoDescription.trim(),
+    createdAt: new Date(),
+  };
+  store.cities.push(city as unknown as (typeof store.cities)[number]);
+  await writeStore(store);
+  invalidateCityCache();
+  invalidateLocalAreasCache();
+
+  return city;
+}
+
+export async function deleteCity(id: string): Promise<boolean> {
+  const trimmed = id.trim();
+  if (!trimmed) return false;
+
+  const store = await readStore();
+  store.deletedCities = store.deletedCities ?? [];
+
+  const trimmedLower = trimmed.toLowerCase();
+  const slugified = slugify(trimmed);
+
+  // 1. Check in custom cities
+  const customIndex = store.cities.findIndex((c) => {
+    const cId = String(c._id ?? "");
+    const cSlug = String(c.slug ?? "").toLowerCase();
+    const cName = String(c.name ?? "").trim().toLowerCase();
+    return (
+      cId === trimmed ||
+      cSlug === trimmedLower ||
+      cSlug === slugified ||
+      cName === trimmedLower
+    );
+  });
+
+  let deletedSlug = "";
+  let deletedName = "";
+
+  if (customIndex >= 0) {
+    const found = store.cities[customIndex] as CityRecord;
+    deletedSlug = found.slug;
+    deletedName = found.name;
+    store.cities.splice(customIndex, 1);
+  }
+
+  // 2. Check in static cities
+  const staticCity = cityPlaces.find((c) => {
+    const sSlug = c.slug.toLowerCase();
+    const sName = c.name.trim().toLowerCase();
+    return (
+      sSlug === trimmedLower ||
+      sSlug === slugified ||
+      sName === trimmedLower ||
+      c.slug === trimmed
+    );
+  });
+
+  if (staticCity) {
+    deletedSlug = deletedSlug || staticCity.slug;
+    deletedName = deletedName || staticCity.name;
+  }
+
+  if (!deletedSlug && !deletedName && customIndex < 0 && !staticCity) {
+    return false;
+  }
+
+  // Record all identifiers in deletedCities
+  const cleanId = trimmed.replace(/^mem_city_/, "").toLowerCase();
+  const keysToRecord = [
+    deletedSlug.toLowerCase(),
+    slugified.toLowerCase(),
+    trimmedLower,
+    cleanId,
+    deletedName.toLowerCase().trim(),
+  ].filter(Boolean);
+
+  for (const k of keysToRecord) {
+    if (!store.deletedCities.some((s) => s.toLowerCase() === k)) {
+      store.deletedCities.push(k);
+    }
+  }
+
+  // Clean up local areas for this city
+  if (deletedName || deletedSlug) {
+    const localAreas = (store.localAreas ?? []) as Array<{
+      _id?: string;
+      cityName?: string;
+      citySlug?: string;
+    }>;
+    store.localAreas = localAreas.filter((a) => {
+      const aSlug = String(a.citySlug ?? "").toLowerCase();
+      const aName = String(a.cityName ?? "").trim().toLowerCase();
+      return (
+        (!deletedSlug || aSlug !== deletedSlug.toLowerCase()) &&
+        (!deletedName || aName !== deletedName.toLowerCase().trim()) &&
+        !keysToRecord.includes(aSlug) &&
+        !keysToRecord.includes(aName)
+      );
+    }) as unknown as typeof store.localAreas;
+  }
+
+  await writeStore(store);
+  invalidateCityCache();
+  invalidateLocalAreasCache();
+  return true;
+}
+
+export async function deleteCities(ids: string[]): Promise<number> {
+  const uniqueIds = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+  if (uniqueIds.length === 0) return 0;
+
+  let count = 0;
+  for (const id of uniqueIds) {
+    const ok = await deleteCity(id);
+    if (ok) count++;
+  }
+  return count;
+}
+
+export async function updateCityName(data: {
+  id?: string;
+  oldName?: string;
+  stateName?: string;
+  newName: string;
+}): Promise<CityRecord> {
+  const trimmedNewName = data.newName.trim();
+  if (!trimmedNewName) {
+    throw new Error("City name cannot be empty.");
+  }
+
+  const store = await readStore();
+  store.cities = store.cities ?? [];
+  store.deletedCities = store.deletedCities ?? [];
+  store.localAreas = store.localAreas ?? [];
+
+  const cities = store.cities as unknown as CityRecord[];
+  const newSlug = slugify(trimmedNewName) || `city-${Date.now()}`;
+  const trimmedId = data.id?.trim() ?? "";
+  const trimmedOldName = data.oldName?.trim() ?? "";
+  const trimmedState = data.stateName?.trim() ?? "";
+
+  let oldCityName = trimmedOldName;
+  let oldCitySlug = "";
+  let cityState = trimmedState;
+  let foundRecord: CityRecord | null = null;
+
+  // 1. Look in custom cities
+  const customIndex = cities.findIndex((c) => {
+    const cId = String(c._id ?? "");
+    const cSlug = String(c.slug ?? "").toLowerCase();
+    const cName = String(c.name ?? "").trim().toLowerCase();
+    const cState = String(c.state ?? "").trim().toLowerCase();
+
+    const matchesId = trimmedId && (cId === trimmedId || cSlug === trimmedId.toLowerCase());
+    const matchesName = trimmedOldName && cName === trimmedOldName.toLowerCase();
+    const stateMatches = !trimmedState || !cState || cState === trimmedState.toLowerCase();
+
+    return (matchesId || matchesName) && stateMatches;
+  });
+
+  if (customIndex >= 0) {
+    foundRecord = cities[customIndex];
+    oldCityName = foundRecord.name;
+    oldCitySlug = foundRecord.slug || slugify(oldCityName);
+    cityState = foundRecord.state || cityState;
+    foundRecord.name = trimmedNewName;
+    foundRecord.slug = newSlug;
+    foundRecord.updatedAt = new Date().toISOString();
+  } else {
+    // 2. Check static city
+    const staticMatch = cityPlaces.find((c) => {
+      const sSlug = c.slug.toLowerCase();
+      const sName = c.name.trim().toLowerCase();
+      const matchesId = trimmedId && (sSlug === trimmedId.toLowerCase() || sName === trimmedId.toLowerCase());
+      const matchesName = trimmedOldName && sName === trimmedOldName.toLowerCase();
+      return matchesId || matchesName;
+    });
+
+    if (staticMatch) {
+      oldCityName = staticMatch.name;
+      oldCitySlug = staticMatch.slug;
+      cityState = trimmedState || staticMatch.state || "";
+
+      // Add old slug to deletedCities
+      if (!store.deletedCities.some((s) => s.toLowerCase() === oldCitySlug.toLowerCase())) {
+        store.deletedCities.push(oldCitySlug.toLowerCase());
+      }
+
+      // Add new record into custom cities
+      foundRecord = {
+        _id: `mem_city_${cities.length + 1}_${Date.now()}`,
+        name: trimmedNewName,
+        slug: newSlug,
+        state: cityState,
+        region: staticMatch.region || cityState || "India",
+        country: "India",
+        famousFood: staticMatch.famousFood || "",
+        seoDescription: staticMatch.seoDescription || "",
+        createdAt: new Date(),
+        updatedAt: new Date().toISOString(),
+      };
+      cities.push(foundRecord);
+    } else {
+      // Fallback: create as new custom city
+      oldCityName = trimmedOldName || trimmedId;
+      oldCitySlug = slugify(oldCityName);
+      foundRecord = {
+        _id: `mem_city_${cities.length + 1}_${Date.now()}`,
+        name: trimmedNewName,
+        slug: newSlug,
+        state: cityState,
+        region: cityState || "India",
+        country: "India",
+        famousFood: "",
+        seoDescription: "",
+        createdAt: new Date(),
+        updatedAt: new Date().toISOString(),
+      };
+      cities.push(foundRecord);
+    }
+  }
+
+  // Ensure new slug is not deleted
+  const newSlugLower = newSlug.toLowerCase();
+  store.deletedCities = store.deletedCities.filter(
+    (s) => s.trim().toLowerCase() !== newSlugLower
+  );
+
+  // Cascade to local areas
+  const oldNameLower = oldCityName.toLowerCase();
+  const oldSlugLower = oldCitySlug.toLowerCase();
+  const localAreas = store.localAreas as Array<{
+    cityName?: string;
+    citySlug?: string;
+  }>;
+
+  for (const a of localAreas) {
+    const aCityName = String(a.cityName ?? "").trim().toLowerCase();
+    const aCitySlug = String(a.citySlug ?? "").toLowerCase();
+    if (
+      (oldNameLower && aCityName === oldNameLower) ||
+      (oldSlugLower && aCitySlug === oldSlugLower)
+    ) {
+      a.cityName = trimmedNewName;
+      a.citySlug = newSlug;
+    }
+  }
+
+  // Cascade to ads
+  if (Array.isArray(store.ads)) {
+    for (const ad of store.ads) {
+      if (ad && typeof ad === "object") {
+        const adCity = String(ad.city ?? "").trim().toLowerCase();
+        if (
+          (oldNameLower && adCity === oldNameLower) ||
+          (oldSlugLower && slugify(adCity) === oldSlugLower)
+        ) {
+          ad.city = trimmedNewName;
+        }
+      }
+    }
+  }
+
+  await writeStore(store);
+  invalidateCityCache();
+  invalidateLocalAreasCache();
+
+  return foundRecord;
+}

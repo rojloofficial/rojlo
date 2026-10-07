@@ -1,0 +1,278 @@
+import nodemailer from "nodemailer";
+
+export type EmailPayload = {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+};
+
+function cleanEnv(val?: string): string {
+  return (val ?? "").trim().replace(/^['"]|['"]$/g, "");
+}
+
+export type EmailResult =
+  | { sent: true }
+  | { sent: false; reason: string; error?: string };
+
+const transporterCache = new Map<string, nodemailer.Transporter>();
+
+function getPooledTransporter(
+  host: string,
+  port: number,
+  user: string,
+  pass: string,
+  isGmail: boolean
+): nodemailer.Transporter {
+  const cleanPass = pass.replace(/\s+/g, "").trim();
+  const cacheKey = `${host}:${port}:${user}:${cleanPass}`;
+  const existing = transporterCache.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+
+  const transportOptions = isGmail
+    ? {
+        service: "gmail",
+        auth: { user: user.trim(), pass: cleanPass },
+        connectionTimeout: 8000,
+        greetingTimeout: 8000,
+        socketTimeout: 10000,
+      }
+    : {
+        host,
+        port,
+        secure: port === 465,
+        auth: { user: user.trim(), pass: cleanPass },
+        connectionTimeout: 8000,
+        greetingTimeout: 8000,
+        socketTimeout: 10000,
+      };
+
+  const transporter = nodemailer.createTransport(
+    transportOptions as nodemailer.TransportOptions
+  );
+  transporterCache.set(cacheKey, transporter);
+  return transporter;
+}
+
+export async function sendEmail({ to, subject, text, html }: EmailPayload): Promise<EmailResult> {
+  const cleanTo = to.trim().toLowerCase();
+  const host = cleanEnv(process.env.SMTP_HOST) || "smtp.gmail.com";
+  const port = Number(cleanEnv(process.env.SMTP_PORT) || "465");
+  const rawUser = cleanEnv(process.env.SMTP_USER);
+  const rawPass = cleanEnv(process.env.SMTP_PASS);
+
+  // Guarantee videoediting9263@gmail.com is used if SMTP_USER is unset or pointing to old placeholders
+  const user = (!rawUser || rawUser.toLowerCase() === "suraj@gmail.com" || rawUser.toLowerCase() === "foxshin@gmail.com")
+    ? "videoediting9263@gmail.com"
+    : rawUser.toLowerCase().trim();
+
+  const pass = (user === "videoediting9263@gmail.com" && (!rawPass || rawUser.toLowerCase() === "suraj@gmail.com" || rawUser.toLowerCase() === "foxshin@gmail.com"))
+    ? "elmcsdwdbdbidihg"
+    : (rawPass || "elmcsdwdbdbidihg").replace(/\s+/g, "").trim();
+
+  const siteName = cleanEnv(process.env.NEXT_PUBLIC_SITE_NAME) || "Rojloo";
+  const customFrom = cleanEnv(process.env.SMTP_FROM);
+  const from = (customFrom && !customFrom.toLowerCase().includes("suraj@gmail.com") && !customFrom.toLowerCase().includes("foxshin@gmail.com"))
+    ? customFrom
+    : `"${siteName}" <${user}>`;
+
+  if (!host || !user || !pass) {
+    console.warn("[email] SMTP credentials not configured. Email skipped for:", cleanTo);
+    return {
+      sent: false,
+      reason: "missing-smtp-config",
+      error: "SMTP credentials are not configured on the server. Please configure SMTP_USER and SMTP_PASS in environment variables.",
+    };
+  }
+
+  const isGmail =
+    host.toLowerCase().includes("gmail") ||
+    user.toLowerCase().endsWith("@gmail.com");
+
+  const primaryCacheKey = `${host}:${port}:${user}:${pass}`;
+  try {
+    const transporter = getPooledTransporter(host, port, user, pass, isGmail);
+    await transporter.sendMail({
+      from,
+      to: cleanTo,
+      replyTo: user,
+      subject,
+      text,
+      html: html ?? text,
+    });
+
+    console.log(`[email] Email sent successfully to ${cleanTo}`);
+    return { sent: true };
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[email] Attempt with SMTP credentials failed for ${cleanTo}:`, errMsg);
+
+    transporterCache.delete(primaryCacheKey);
+
+    const isAuthError =
+      errMsg.includes("535") ||
+      errMsg.includes("BadCredentials") ||
+      errMsg.includes("EAUTH") ||
+      (typeof error === "object" && error !== null && (error as { code?: string }).code === "EAUTH");
+
+    return {
+      sent: false,
+      reason: isAuthError ? "gmail-auth-failed" : "send-failed",
+      error: isAuthError
+        ? `Gmail rejected the credentials for ${user} (535 BadCredentials). Google requires a fresh 16-character App Password generated specifically for ${user} at myaccount.google.com/apppasswords with 2-Step Verification turned ON.`
+        : errMsg,
+    };
+  }
+}
+
+const SITE_NAME = process.env.NEXT_PUBLIC_SITE_NAME ?? "Rojloo";
+
+/**
+ * Send an email verification OTP to the user, using the site's branding.
+ * Formatted specifically for primary inbox delivery without spam flags.
+ */
+export function sendOtpEmail({
+  to,
+  otp,
+  expiresInMinutes = 10,
+}: {
+  to: string;
+  otp: string;
+  expiresInMinutes?: number;
+}) {
+  const siteName = cleanEnv(process.env.NEXT_PUBLIC_SITE_NAME) || SITE_NAME;
+  const subject = `${otp} is your ${siteName} verification code`;
+  const text = [
+    `Your ${siteName} verification code is:`,
+    ``,
+    otp,
+    ``,
+    `This code expires in ${expiresInMinutes} minutes.`,
+    ``,
+    `If you did not request this code, you can safely ignore this email.`,
+    ``,
+    `— ${siteName} Team`,
+  ].join("\n");
+
+  const html = [
+    `<!DOCTYPE html>`,
+    `<html lang="en">`,
+    `<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${otp} is your verification code</title></head>`,
+    `<body style="margin:0;padding:24px 12px;background-color:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">`,
+    `<!-- Preheader text visible in email previews / push notifications -->`,
+    `<div style="display:none;font-size:1px;color:#ffffff;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;mso-hide:all;">`,
+    `${otp} is your ${siteName} verification code. Valid for ${expiresInMinutes} minutes.`,
+    `</div>`,
+    `<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">`,
+    `<tr><td align="center">`,
+    `<table role="presentation" style="max-width:480px;width:100%;background:#ffffff;border:1px solid #d1d5db;border-radius:24px;padding:32px 24px;box-shadow:0 4px 12px rgba(17,24,39,0.06);" border="0" cellpadding="0" cellspacing="0">`,
+    `<tr><td style="text-align:center;">`,
+    `<h1 style="color:#111827;font-size:24px;font-weight:800;margin:0 0 12px;letter-spacing:-0.5px;">${siteName}</h1>`,
+    `<p style="color:#374151;font-size:16px;line-height:24px;margin:0 0 20px;">Use the verification code below to verify your email address and continue.</p>`,
+    `<div style="background:#f3f4f6;border:2px dashed #9ca3af;border-radius:16px;padding:18px;margin:0 auto 20px;text-align:center;">`,
+    `<span style="font-size:36px;font-weight:800;letter-spacing:10px;color:#1f2937;font-family:monospace;display:inline-block;padding-left:10px;">${otp}</span>`,
+    `</div>`,
+    `<p style="color:#111827;font-size:14px;line-height:20px;margin:0 0 8px;">Valid for <strong>${expiresInMinutes} minutes</strong>. Please do not share this code.</p>`,
+    `<p style="color:#4b5563;font-size:13px;line-height:18px;margin:0;">If you didn't request this code, you can safely ignore this email.</p>`,
+    `<div style="margin-top:24px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;text-align:center;">`,
+    `This is an automated security verification message from ${siteName}.`,
+    `</div>`,
+    `</td></tr>`,
+    `</table>`,
+    `</td></tr>`,
+    `</table>`,
+    `</body>`,
+    `</html>`,
+  ].join("");
+
+  return sendEmail({ to, subject, text, html });
+}
+
+export function sendVipInviteEmail({
+  to,
+  areaLabel,
+  phone,
+  loginUrl,
+  expiresAt,
+}: {
+  to: string;
+  areaLabel: string;
+  phone: string;
+  loginUrl?: string;
+  expiresAt: Date | string;
+}) {
+  const siteName = cleanEnv(process.env.NEXT_PUBLIC_SITE_NAME) || SITE_NAME;
+  const expiryFormatted = new Date(expiresAt).toLocaleString("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  const subject = `VIP Access Granted for ${areaLabel} - Your Login Details`;
+
+  const envVipUrl = cleanEnv(process.env.VIP_LOGIN_URL || process.env.NEXT_PUBLIC_VIP_URL);
+  const effectiveLoginUrl =
+    envVipUrl || (loginUrl ? cleanEnv(loginUrl) : "") || "https://rojloo.vercel.app/vip/login";
+
+  const text = [
+    `Hello,`,
+    ``,
+    `You have been granted VIP Control Panel access for: ${areaLabel}.`,
+    `Your access is valid until: ${expiryFormatted}.`,
+    ``,
+    `----------------------------------------`,
+    `YOUR VIP LOGIN DETAILS:`,
+    `----------------------------------------`,
+    `• Email: ${to}`,
+    `• Password: ${phone}`,
+    `• VIP Page URL: ${effectiveLoginUrl}`,
+    `----------------------------------------`,
+    ``,
+    `Log in to your VIP Control Panel at:`,
+    effectiveLoginUrl,
+    ``,
+    `Please contact the admin team if you need any assistance.`,
+    ``,
+    `— ${siteName} Team`,
+  ].join("\n");
+
+  const html = [
+    `<!DOCTYPE html>`,
+    `<html lang="en">`,
+    `<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>VIP Access Granted</title></head>`,
+    `<body style="margin:0;padding:24px 12px;background-color:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">`,
+    `<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">`,
+    `<tr><td align="center">`,
+    `<table role="presentation" style="max-width:520px;width:100%;background:#ffffff;border:1px solid #d1d5db;border-radius:24px;padding:36px 24px;box-shadow:0 4px 12px rgba(17,24,39,0.06);" border="0" cellpadding="0" cellspacing="0">`,
+    `<tr><td style="text-align:center;">`,
+    `<h1 style="color:#111827;font-size:24px;font-weight:900;margin:0 0 8px;letter-spacing:-0.5px;">${siteName} VIP Portal</h1>`,
+    `<p style="color:#374151;font-size:15px;line-height:22px;margin:0 0 20px;">You have been assigned VIP access control for:</p>`,
+    `<div style="background:#f3f4f6;border:2px solid #9ca3af;border-radius:16px;padding:16px;margin:0 auto 20px;text-align:center;">`,
+    `<span style="font-size:20px;font-weight:800;color:#1f2937;display:block;">${areaLabel}</span>`,
+    `<span style="font-size:12px;color:#4b5563;font-weight:600;display:block;margin-top:4px;">Valid until ${expiryFormatted}</span>`,
+    `</div>`,
+    `<div style="background:#f9fafb;border:1.5px solid #9ca3af;border-radius:14px;padding:18px 20px;margin:0 auto 24px;text-align:left;">`,
+    `<h3 style="margin:0 0 12px;font-size:14px;font-weight:800;color:#374151;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #d1d5db;padding-bottom:8px;">Your VIP Login Details</h3>`,
+    `<p style="margin:6px 0;font-size:13px;color:#111827;"><strong>Email:</strong> <span style="font-family:monospace;font-size:14px;color:#1e1e1e;font-weight:600;">${to}</span></p>`,
+    `<p style="margin:6px 0;font-size:13px;color:#111827;"><strong>Password:</strong> <span style="font-family:monospace;font-size:14px;color:#374151;font-weight:700;">${phone}</span></p>`,
+    `<p style="margin:6px 0;font-size:13px;color:#111827;"><strong>VIP Page URL:</strong> <a href="${effectiveLoginUrl}" style="font-family:monospace;font-size:13px;color:#4b5563;font-weight:600;word-break:break-all;">${effectiveLoginUrl}</a></p>`,
+    `</div>`,
+    `<div style="margin:24px 0;">`,
+    `<a href="${effectiveLoginUrl}" style="background-color:#111827;color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:14px;font-weight:700;font-size:15px;display:inline-block;box-shadow:0 4px 10px rgba(17,24,39,0.25);">Login to VIP Panel &rarr;</a>`,
+    `</div>`,
+    `<p style="color:#374151;font-size:13px;line-height:20px;margin:20px 0 8px;">Or copy and paste this link in your browser:</p>`,
+    `<p style="margin:0 0 20px;"><a href="${effectiveLoginUrl}" style="color:#4b5563;font-weight:600;font-size:13px;word-break:break-all;">${effectiveLoginUrl}</a></p>`,
+    `<div style="margin-top:28px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;text-align:center;">`,
+    `This is an automated VIP notification from ${siteName}. If you were not expecting this, please contact support.`,
+    `</div>`,
+    `</td></tr>`,
+    `</table>`,
+    `</td></tr>`,
+    `</table>`,
+    `</body>`,
+    `</html>`,
+  ].join("");
+
+  return sendEmail({ to, subject, text, html });
+}
+

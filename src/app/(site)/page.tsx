@@ -1,0 +1,160 @@
+import type { Metadata } from "next";
+import Image from "next/image";
+import Link from "next/link";
+import Button from "@/components/ui/button";
+import SearchBar from "@/components/search-bar";
+import { StaticSeoSection } from "@/components/seo/static-seo-section";
+import { serviceCards } from "@/lib/services";
+import { siteConfig, publicRobotsConfig } from "@/lib/config/site";
+
+export const metadata: Metadata = {
+  title: "Escort Call Girl in Rojloo, Companion, Thai Massage & Nightlife Listings | Rojlo",
+  description:
+    "Find local listings for escort call girl in rojloo, call girls in rojloo, massage in rojloo, body massage, male escort, male escort service, escort service rojloo, night outings, hotel parties, Thai massage, and other social experiences.",
+  alternates: {
+    canonical: siteConfig.url,
+  },
+  robots: publicRobotsConfig,
+  openGraph: {
+    title: "Escort Call Girl in Rojloo, Companion, Thai Massage & Nightlife Listings | Rojlo",
+    description:
+      "Find local listings for escort call girl in rojloo, call girls in rojloo, massage in rojloo, body massage, male escort, male escort service, escort service rojloo, night outings, hotel parties, Thai massage, and other social experiences.",
+    url: siteConfig.url,
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Escort Call Girl in Rojloo, Companion, Thai Massage & Nightlife Listings | Rojlo",
+    description:
+      "Find local listings for escort call girl in rojloo, call girls in rojloo, massage in rojloo, body massage, male escort, male escort service, escort service rojloo, night outings, hotel parties, Thai massage, and other social experiences.",
+  },
+};
+
+export default async function Home() {
+  return (
+    <main>
+      {/* Part 1 — Homepage Hero */}
+      <section className="bg-gray-200">
+        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
+          <div className="mx-auto max-w-6xl text-center">
+            <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.3em] text-gray-700">
+              get you fun
+            </p>
+            <h1 className="mt-3 text-3xl sm:text-4xl lg:text-5xl font-black leading-tight text-gray-950 break-words">
+              Rojlo Mojlo Na Mile To Khojlo
+            </h1>
+            <p className="mx-auto mt-4 max-w-none text-base sm:text-lg leading-7 sm:leading-8 text-gray-900">
+              Find local listings for{" "}
+              <strong>
+                escort call girl in rojloo, call girls in rojloo, massage in rojloo, body massage, male escort, male escort service, escort service rojloo
+              </strong>
+              , night outings, hotel parties, Thai massage, and other social experiences. Browse listings by location, discover available services, and connect directly with advertisers.
+            </p>
+            <p className="mx-auto mt-3 max-w-none text-base sm:text-lg leading-7 sm:leading-8 text-gray-800">
+              Explore listings based on your preferred location and experience. Each advertiser can provide their own information, availability, service details, and contact preferences.
+            </p>
+
+            <div className="mt-7 flex flex-wrap justify-center gap-3">
+              <Button href="/services" variant="solid" className="!text-white">
+                Explore Services
+              </Button>
+              <Button href="/places" variant="solid" className="!text-white">
+                Explore Places
+              </Button>
+              <Button href="/post-ad/new" variant="solid" className="!text-white px-6 py-3">
+                Post an Ad
+              </Button>
+            </div>
+
+            <SearchBar />
+          </div>
+        </div>
+      </section>
+
+      {/* Services Showcase */}
+      <section className="px-4 py-8 sm:py-12 sm:px-6">
+        <div className="mx-auto max-w-6xl rounded-[2rem] bg-gray-100/85 p-5 sm:p-8 lg:p-10 shadow-lg shadow-gray-200/40">
+          <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.3em] text-gray-700">
+            Services
+          </p>
+          <h2 className="mt-3 text-2xl sm:text-3xl lg:text-4xl font-black text-gray-950">
+            What you can find
+          </h2>
+          <p className="mt-3 sm:mt-4 max-w-2xl text-base sm:text-lg leading-7 sm:leading-8 text-gray-900">
+            Rojlo brings together the everyday services people need, with a
+            simple way to post your own ad.
+          </p>
+
+          <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {serviceCards.map((item) => (
+              <article
+                key={item.title}
+                id={`${item.id}-section`}
+                className="group overflow-hidden rounded-[1.75rem] bg-white/90 shadow-md shadow-gray-200/30 transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-xl"
+              >
+                <div className="relative h-56 overflow-hidden rounded-[1.25rem]">
+                  <Image
+                    src={item.image}
+                    alt={item.title}
+                    fill
+                    className="object-cover transition-transform duration-500 ease-out group-hover:scale-105"
+                    sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                  />
+                </div>
+                <h3 className="mt-4 px-6 text-xl font-black text-gray-950">
+                  <Link
+                    href={`/services#${item.id}-section`}
+                    className="hover:underline transition-colors"
+                  >
+                    {item.title}
+                  </Link>
+                </h3>
+                <p className="mt-2 px-6 pb-6 text-sm leading-7 text-gray-900">
+                  {item.description}
+                </p>
+                <div className="px-6 pb-6 flex flex-wrap items-center gap-2">
+                  <Button
+                    href={`/services#${item.id}-section`}
+                    variant="solid"
+                    className="!text-white text-xs sm:text-sm px-4 py-2"
+                  >
+                    Learn More
+                  </Button>
+                  <Button
+                    href="/post-ad/new"
+                    variant="soft"
+                    className="text-xs sm:text-sm px-4 py-2"
+                  >
+                    Post a Service
+                  </Button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Call to Action */}
+      <section className="px-4 pb-12 sm:px-6">
+        <div className="mx-auto max-w-6xl rounded-[2rem] bg-gray-950 p-6 sm:p-8 lg:p-10 text-center text-white">
+          <h2 className="text-2xl font-black !text-white sm:text-3xl">
+            Ready to get started?
+          </h2>
+          <p className="mx-auto mt-3 max-w-3xl text-base leading-7 !text-white">
+            Post your ad in minutes and reach people looking for your service in
+            your city.
+          </p>
+          <div className="mt-6 flex justify-center">
+            <Button href="/post-ad/new" variant="solid">
+              Post an Ad
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <div className="px-4 sm:px-6 lg:px-8 pb-16 sm:pb-20">
+        <StaticSeoSection pageKey="home" inCard={false} />
+      </div>
+    </main>
+  );
+}

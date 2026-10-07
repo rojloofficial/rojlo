@@ -1,0 +1,2359 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AdminStateHierarchySkeleton } from "@/components/skeletons/admin-skeletons";
+import { slugify } from "@/lib/utils/string";
+import { useDebounce } from "@/hooks/use-debounce";
+import { useAdminContext } from "@/components/admin/use-admin-context";
+
+type StateRecord = {
+  _id?: string;
+  name: string;
+  slug: string;
+};
+
+type CityRow = {
+  _id?: string;
+  name: string;
+  slug?: string;
+  region: string;
+  state?: string;
+  source?: "Custom" | "Static";
+};
+
+type LocalAreaRow = {
+  _id?: string;
+  name: string;
+  slug: string;
+  cityName: string;
+  citySlug: string;
+  stateName?: string;
+};
+
+type JsonSummary = {
+  totalStates: number;
+  totalCities: number;
+  totalLocalAreas: number;
+  newStates: number;
+  newCities: number;
+  newLocalAreas: number;
+  stateSeoCount?: number;
+  citySeoCount?: number;
+  localAreaSeoCount?: number;
+};
+
+const COUNTRY_OPTIONS = ["India"];
+
+// UI-only sentinel values for inline creation options
+const ADD_CITY_VALUE = "__ADD_CITY__";
+const ADD_LOCAL_AREA_VALUE = "__ADD_LOCAL_AREA__";
+
+function normalizeState(s?: string): string {
+  return (s ?? "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
+/**
+ * Dependency-free fuzzy matching:
+ * Matches direct substring, token words, and character sequence.
+ */
+function fuzzyMatch(target: string, query: string): boolean {
+  if (!query) return true;
+  if (!target) return false;
+  const t = target.toLowerCase().trim();
+  const q = query.toLowerCase().trim();
+
+  // 1. Direct substring
+  if (t.includes(q)) return true;
+
+  // 2. Token / word-level match (all words in query must be in target)
+  const tokens = q.split(/[\s\-_,]+/).filter(Boolean);
+  if (tokens.length > 0 && tokens.every((token) => t.includes(token))) {
+    return true;
+  }
+
+  // 3. Subsequence matching (letters in query appear in order in target)
+  let tIdx = 0;
+  let qIdx = 0;
+  while (tIdx < t.length && qIdx < q.length) {
+    if (t[tIdx] === q[qIdx]) {
+      qIdx++;
+    }
+    tIdx++;
+  }
+  return qIdx === q.length;
+}
+
+export default function AdminStates() {
+  const me = useAdminContext();
+  const isSuperAdmin = me?.role === "main";
+  const [states, setStates] = useState<StateRecord[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
+  const [allLocalAreas, setAllLocalAreas] = useState<LocalAreaRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [stateName, setStateName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  // Search input & debounced search term
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search.trim(), 300);
+
+  // Collapsible state tracking
+  const [expandedStates, setExpandedStates] = useState<Set<string>>(new Set());
+  const [expandedCities, setExpandedCities] = useState<Set<string>>(new Set());
+
+  // Cascading Location Selector State: State -> City -> Local Area
+  const [selectedState, setSelectedState] = useState("");
+  const [selectedCity, setSelectedCity] = useState("");
+  const [selectedLocalArea, setSelectedLocalArea] = useState("");
+
+  // Inline Creation Form States
+  const [newCityName, setNewCityName] = useState("");
+  const [creatingCity, setCreatingCity] = useState(false);
+  const [newLocalAreaName, setNewLocalAreaName] = useState("");
+  const [creatingLocalArea, setCreatingLocalArea] = useState(false);
+
+  // JSON File Upload / Validation state
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [pendingPayload, setPendingPayload] = useState<unknown | null>(null);
+  const [importSummary, setImportSummary] = useState<JsonSummary | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  // Delete All Locations Modal & Safety State
+  const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
+  const [deleteAllConfirmed, setDeleteAllConfirmed] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
+
+  // Delete All Local Areas Modal & Safety State
+  const [showDeleteAllAreasModal, setShowDeleteAllAreasModal] = useState(false);
+  const [deleteAllAreasConfirmed, setDeleteAllAreasConfirmed] = useState(false);
+  const [deletingAllAreas, setDeletingAllAreas] = useState(false);
+
+  // Backup Export State
+  const [downloadingBackup, setDownloadingBackup] = useState(false);
+
+  // Load all States, Cities, and Local Areas
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    try {
+      const timestamp = Date.now();
+      const [sRes, cRes, aRes] = await Promise.all([
+        fetch(`/api/admin/states?t=${timestamp}`, { credentials: "include", cache: "no-store" }),
+        fetch(`/api/admin/cities?t=${timestamp}`, { credentials: "include", cache: "no-store" }),
+        fetch(`/api/admin/local-areas?t=${timestamp}`, { credentials: "include", cache: "no-store" }),
+      ]);
+      if (sRes.ok) setStates((await sRes.json()).states ?? []);
+      if (cRes.ok) setCities((await cRes.json()).cities ?? []);
+      if (aRes.ok) setAllLocalAreas((await aRes.json()).localAreas ?? []);
+    } catch {
+      setError("Failed to load data. Please refresh.");
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      void load();
+    });
+  }, [load]);
+
+  // State Collapse Toggle
+  function toggleState(stateKey: string) {
+    setExpandedStates((prev) => {
+      const next = new Set(prev);
+      if (next.has(stateKey)) {
+        next.delete(stateKey);
+      } else {
+        next.add(stateKey);
+      }
+      return next;
+    });
+  }
+
+  // City Collapse Toggle
+  function toggleCity(cityKey: string) {
+    setExpandedCities((prev) => {
+      const next = new Set(prev);
+      if (next.has(cityKey)) {
+        next.delete(cityKey);
+      } else {
+        next.add(cityKey);
+      }
+      return next;
+    });
+  }
+
+  // Expand / Collapse All
+  function handleExpandAll() {
+    const allStateKeys = new Set(states.map((s) => s._id ?? s.slug ?? s.name));
+    const allCityKeys = new Set(
+      cities.map((c) => `${c.state ?? ""}-${c.name}`)
+    );
+    setExpandedStates(allStateKeys);
+    setExpandedCities(allCityKeys);
+  }
+
+  function handleCollapseAll() {
+    setExpandedStates(new Set());
+    setExpandedCities(new Set());
+  }
+
+  // Hierarchy Fuzzy Filter
+  const filteredHierarchy = useMemo(() => {
+    const q = debouncedSearch.trim();
+
+    return states
+      .map((state) => {
+        const stateKey = state._id ?? state.slug ?? state.name;
+        const stateMatches = fuzzyMatch(state.name, q);
+
+        const stateCities = cities.filter((c) => {
+          if (!c.state) return false;
+          const cState = c.state.trim().toLowerCase();
+          const sName = state.name.trim().toLowerCase();
+          return (
+            cState === sName ||
+            normalizeState(c.state) === normalizeState(state.name)
+          );
+        });
+
+        const matchingCities = stateCities
+          .map((city) => {
+            const cityKey = `${state.name}-${city.name}`;
+            const cityMatches = fuzzyMatch(city.name, q);
+
+            const cityAreas = allLocalAreas.filter((a) => {
+              const aCitySlug = (a.citySlug || "").toLowerCase();
+              const cSlug = (city.slug || "").toLowerCase();
+              const cityMatch =
+                (aCitySlug && cSlug && aCitySlug === cSlug) ||
+                a.cityName.trim().toLowerCase() === city.name.trim().toLowerCase() ||
+                slugify(a.cityName) === slugify(city.name);
+
+              if (!cityMatch) return false;
+
+              if (!a.stateName || !state.name) return true;
+              const aState = a.stateName.trim().toLowerCase();
+              const sName = state.name.trim().toLowerCase();
+              return (
+                aState === sName ||
+                normalizeState(a.stateName) === normalizeState(state.name) ||
+                slugify(a.stateName) === slugify(state.name)
+              );
+            });
+
+            const matchingAreas = cityAreas.filter((area) =>
+              fuzzyMatch(area.name, q)
+            );
+
+            const hasAreaMatch = matchingAreas.length > 0;
+            const isCityVisible =
+              !q || stateMatches || cityMatches || hasAreaMatch;
+
+            return {
+              city,
+              cityKey,
+              cityMatches,
+              cityAreas,
+              matchingAreas,
+              hasAreaMatch,
+              isCityVisible,
+            };
+          })
+          .filter((c) => c.isCityVisible);
+
+        const isStateVisible = !q || stateMatches || matchingCities.length > 0;
+
+        return {
+          state,
+          stateKey,
+          stateMatches,
+          matchingCities,
+          isStateVisible,
+        };
+      })
+      .filter((s) => s.isStateVisible);
+  }, [states, cities, allLocalAreas, debouncedSearch]);
+
+  const [deletingStateId, setDeletingStateId] = useState<string | null>(null);
+  const [deletingCityId, setDeletingCityId] = useState<string | null>(null);
+  const [deletingAreaId, setDeletingAreaId] = useState<string | null>(null);
+
+  async function addState(e: React.FormEvent) {
+    e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
+    setError("");
+    setSuccess("");
+    try {
+      const res = await fetch("/api/admin/states", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: stateName }),
+      });
+      const data = await res.json().catch(() => ({} as Record<string, unknown>));
+      if (!res.ok) {
+        setError((data.error as string) || "Failed to add state.");
+        return;
+      }
+      const created = data.state as StateRecord | undefined;
+      if (created) {
+        setStates((prev) => {
+          const next = [...prev, created];
+          return next.sort((a, b) => a.name.localeCompare(b.name));
+        });
+        setExpandedStates((prev) => new Set(prev).add(created._id || created.slug || created.name));
+      }
+      setStateName("");
+      setSuccess("State added successfully.");
+      await load(true);
+    } catch {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function removeState(id?: string) {
+    if (!id) return;
+    if (!confirm("Delete this state?")) return;
+
+    // Find state to get name and slug
+    const stateToDelete = states.find(
+      (s) => s._id === id || s.slug === id || s.name.toLowerCase() === id.toLowerCase()
+    );
+    const targetStateName = stateToDelete?.name || id;
+    const targetStateSlug = stateToDelete?.slug || slugify(targetStateName);
+
+    // Save snapshots for rollback
+    const prevStates = states;
+    const prevCities = cities;
+    const prevAreas = allLocalAreas;
+
+    // 1. INSTANT OPTIMISTIC PURGE: Remove immediately from screen with 0ms delay!
+    setStates((prev) =>
+      prev.filter(
+        (s) =>
+          s._id !== id &&
+          s.slug !== id &&
+          s.name.toLowerCase() !== targetStateName.toLowerCase() &&
+          s.name.toLowerCase() !== id.toLowerCase()
+      )
+    );
+    setCities((prev) =>
+      prev.filter((c) => {
+        const cState = (c.state || "").trim().toLowerCase();
+        return (
+          cState !== targetStateName.toLowerCase() &&
+          slugify(cState) !== targetStateSlug.toLowerCase() &&
+          cState !== id.toLowerCase()
+        );
+      })
+    );
+    setAllLocalAreas((prev) =>
+      prev.filter((a) => {
+        const aState = (a.stateName || "").trim().toLowerCase();
+        return (
+          aState !== targetStateName.toLowerCase() &&
+          slugify(aState) !== targetStateSlug.toLowerCase() &&
+          aState !== id.toLowerCase()
+        );
+      })
+    );
+
+    setSelectedState("");
+    setSelectedCity("");
+    setSelectedLocalArea("");
+    setDeletingStateId(id);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/states", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        setStates(prevStates);
+        setCities(prevCities);
+        setAllLocalAreas(prevAreas);
+        const data = await res.json().catch(() => ({}));
+        setError((data.error as string) || "Failed to delete state.");
+        return;
+      }
+      setSuccess("State deleted successfully.");
+      await load(true);
+    } catch {
+      setStates(prevStates);
+      setCities(prevCities);
+      setAllLocalAreas(prevAreas);
+      setError("Failed to delete state.");
+    } finally {
+      setDeletingStateId(null);
+    }
+  }
+
+  // Delete City Handler with Instant Optimistic Purge
+  async function handleDeleteCity(id?: string, cityName?: string) {
+    if (!id) return;
+    const targetName = cityName || id;
+    if (!confirm(`Delete city "${targetName}"?`)) return;
+
+    const cityToDelete = cities.find(
+      (c) =>
+        c._id === id ||
+        c.slug === id ||
+        c.name.toLowerCase() === targetName.toLowerCase()
+    );
+    const targetCitySlug = cityToDelete?.slug || slugify(targetName);
+
+    // Save snapshots for rollback
+    const prevCities = cities;
+    const prevAreas = allLocalAreas;
+
+    // 1. INSTANT OPTIMISTIC PURGE: Remove immediately from screen with 0ms delay!
+    setCities((prev) =>
+      prev.filter(
+        (c) =>
+          c._id !== id &&
+          c.slug !== id &&
+          (!c.slug || c.slug.toLowerCase() !== targetCitySlug.toLowerCase()) &&
+          c.name.toLowerCase() !== targetName.toLowerCase()
+      )
+    );
+    setAllLocalAreas((prev) =>
+      prev.filter(
+        (a) =>
+          a.cityName.toLowerCase() !== targetName.toLowerCase() &&
+          a.citySlug.toLowerCase() !== targetCitySlug.toLowerCase()
+      )
+    );
+
+    setDeletingCityId(id);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/cities", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        setCities(prevCities);
+        setAllLocalAreas(prevAreas);
+        const data = await res.json().catch(() => ({}));
+        setError((data.error as string) || "Failed to delete city.");
+        return;
+      }
+      setSuccess(`City "${targetName}" deleted successfully.`);
+      await load(true);
+    } catch {
+      setCities(prevCities);
+      setAllLocalAreas(prevAreas);
+      setError("Failed to delete city.");
+    } finally {
+      setDeletingCityId(null);
+    }
+  }
+
+  // Update State Name
+  async function handleUpdateStateName(id: string, oldName: string, newName: string) {
+    if (!newName.trim() || newName.trim() === oldName.trim()) return;
+    setError("");
+    setSuccess("");
+    const trimmed = newName.trim();
+    // Optimistic update locally
+    setStates((prev) =>
+      prev.map((s) =>
+        s._id === id || s.slug === id || s.name.toLowerCase() === oldName.toLowerCase()
+          ? { ...s, name: trimmed }
+          : s
+      )
+    );
+    setCities((prev) =>
+      prev.map((c) =>
+        c.state?.toLowerCase() === oldName.toLowerCase()
+          ? { ...c, state: trimmed }
+          : c
+      )
+    );
+    setAllLocalAreas((prev) =>
+      prev.map((a) =>
+        a.stateName?.toLowerCase() === oldName.toLowerCase()
+          ? { ...a, stateName: trimmed }
+          : a
+      )
+    );
+    if (selectedState.toLowerCase() === oldName.toLowerCase()) {
+      setSelectedState(trimmed);
+    }
+
+    try {
+      const res = await fetch("/api/admin/states", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ id, oldName, newName: trimmed }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data.error as string) || "Failed to update state name.");
+        await load(true);
+        return;
+      }
+      setSuccess(`State updated to "${trimmed}".`);
+      await load(true);
+    } catch {
+      setError("Failed to update state name.");
+      await load(true);
+    }
+  }
+
+  // Update City Name
+  async function handleUpdateCityName(id: string, oldName: string, stateName: string, newName: string) {
+    if (!newName.trim() || newName.trim() === oldName.trim()) return;
+    setError("");
+    setSuccess("");
+    const trimmed = newName.trim();
+    // Optimistic update locally
+    setCities((prev) =>
+      prev.map((c) =>
+        (c._id === id || c.name.toLowerCase() === oldName.toLowerCase()) &&
+        (!stateName || !c.state || c.state.toLowerCase() === stateName.toLowerCase())
+          ? { ...c, name: trimmed }
+          : c
+      )
+    );
+    setAllLocalAreas((prev) =>
+      prev.map((a) =>
+        a.cityName?.toLowerCase() === oldName.toLowerCase()
+          ? { ...a, cityName: trimmed }
+          : a
+      )
+    );
+    if (selectedCity.toLowerCase() === oldName.toLowerCase()) {
+      setSelectedCity(trimmed);
+    }
+
+    try {
+      const res = await fetch("/api/admin/cities", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ id, oldName, stateName, newName: trimmed }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data.error as string) || "Failed to update city name.");
+        await load(true);
+        return;
+      }
+      setSuccess(`City updated to "${trimmed}".`);
+      await load(true);
+    } catch {
+      setError("Failed to update city name.");
+      await load(true);
+    }
+  }
+
+  // Update Local Area Name
+  async function handleUpdateLocalAreaName(id: string | undefined, oldName: string, cityName: string, newName: string) {
+    if (!newName.trim() || newName.trim() === oldName.trim()) return;
+    setError("");
+    setSuccess("");
+    const trimmed = newName.trim();
+    // Optimistic update locally
+    setAllLocalAreas((prev) =>
+      prev.map((a) =>
+        a._id === id ||
+        (a.name.toLowerCase() === oldName.toLowerCase() &&
+          a.cityName.toLowerCase() === cityName.toLowerCase())
+          ? { ...a, name: trimmed }
+          : a
+      )
+    );
+    if (selectedLocalArea.toLowerCase() === oldName.toLowerCase()) {
+      setSelectedLocalArea(trimmed);
+    }
+
+    try {
+      const res = await fetch("/api/admin/local-areas", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ id, oldName, cityName, newName: trimmed }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data.error as string) || "Failed to update local area name.");
+        await load(true);
+        return;
+      }
+      setSuccess(`Local area updated to "${trimmed}".`);
+      await load(true);
+    } catch {
+      setError("Failed to update local area name.");
+      await load(true);
+    }
+  }
+
+  // Local Area Delete with Instant Optimistic Purge
+  async function handleDeleteLocalArea(id?: string, cityName?: string, name?: string) {
+    if (!id && !name) return;
+    const targetName = name || id || "";
+    const targetCity = cityName || "";
+    if (!confirm(`Delete local area "${targetName}"?`)) return;
+
+    const prevAreas = allLocalAreas;
+
+    // 1. INSTANT OPTIMISTIC PURGE: Remove immediately from screen with 0ms delay!
+    setAllLocalAreas((prev) =>
+      prev.filter((a) => {
+        const matchesId = id && (a._id === id || a.slug === id);
+        const matchesNameAndCity =
+          targetName &&
+          a.name.toLowerCase() === targetName.toLowerCase() &&
+          (!targetCity || a.cityName.toLowerCase() === targetCity.toLowerCase());
+        return !(matchesId || matchesNameAndCity);
+      })
+    );
+
+    setDeletingAreaId(id || targetName);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/local-areas", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        cache: "no-store",
+        body: JSON.stringify({ id, name: targetName, cityName: targetCity }),
+      });
+      if (!res.ok) {
+        setAllLocalAreas(prevAreas);
+        const data = await res.json().catch(() => ({}));
+        setError((data.error as string) || "Failed to delete local area.");
+        return;
+      }
+      setSuccess(`Local area "${targetName}" deleted.`);
+      await load(true);
+    } catch {
+      setAllLocalAreas(prevAreas);
+      setError("Failed to delete local area.");
+    } finally {
+      setDeletingAreaId(null);
+    }
+  }
+
+  function handleCityAdded(newCity: CityRow) {
+    setCities((prev) => {
+      const exists = prev.some(
+        (c) =>
+          c.name.trim().toLowerCase() === newCity.name.trim().toLowerCase() &&
+          (!newCity.state || !c.state || c.state.trim().toLowerCase() === newCity.state.trim().toLowerCase())
+      );
+      return exists ? prev : [...prev, newCity];
+    });
+    if (newCity.state) {
+      setExpandedStates((prev) => new Set(prev).add(newCity.state!));
+      setExpandedCities((prev) =>
+        new Set(prev).add(`${newCity.state}-${newCity.name}`)
+      );
+    }
+  }
+
+  function handleAreaAdded(newArea: LocalAreaRow) {
+    setAllLocalAreas((prev) => {
+      const exists = prev.some(
+        (a) =>
+          a.name.trim().toLowerCase() === newArea.name.trim().toLowerCase() &&
+          a.cityName.trim().toLowerCase() === newArea.cityName.trim().toLowerCase()
+      );
+      return exists ? prev : [...prev, newArea];
+    });
+    if (newArea.stateName && newArea.cityName) {
+      setExpandedCities((prev) =>
+        new Set(prev).add(`${newArea.stateName}-${newArea.cityName}`)
+      );
+    }
+  }
+
+  // Handle JSON File Selection & Atomic Pre-Validation
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setError("");
+    setSuccess("");
+    setImporting(true);
+
+    try {
+      const text = await file.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        setError("Selected file is not valid JSON. Please upload a valid .json file.");
+        setImporting(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        return;
+      }
+
+      const res = await fetch("/api/admin/states/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ action: "validate", payload: parsed }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data.error as string) || "JSON validation failed.");
+        setImporting(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        return;
+      }
+
+      setPendingPayload(parsed);
+      setImportSummary(data.summary as JsonSummary);
+    } catch {
+      setError("Failed to process the JSON file.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  // Confirm and Execute Import
+  async function confirmImport() {
+    if (!pendingPayload || importing) return;
+    setImporting(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/states/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ action: "confirm", payload: pendingPayload }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data.error as string) || "Import failed.");
+        return;
+      }
+
+      const summary = data.summary as JsonSummary;
+      const seoDetails: string[] = [];
+      if (summary.stateSeoCount) seoDetails.push(`${summary.stateSeoCount} state SEO`);
+      if (summary.citySeoCount) seoDetails.push(`${summary.citySeoCount} city SEO`);
+      if (summary.localAreaSeoCount) seoDetails.push(`${summary.localAreaSeoCount} local area SEO`);
+      const seoMsg = seoDetails.length > 0 ? ` with ${seoDetails.join(", ")} records` : "";
+
+      setSuccess(
+        `Import complete! Processed ${summary.totalStates} states (${summary.newStates} new), ${summary.totalCities} cities (${summary.newCities} new), and ${summary.totalLocalAreas} local areas (${summary.newLocalAreas} new)${seoMsg}.`
+      );
+      setImportSummary(null);
+      setPendingPayload(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      await load(true);
+    } catch {
+      setError("Failed to complete JSON import.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function cancelImport() {
+    setImportSummary(null);
+    setPendingPayload(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  // Delete All Locations Handler
+  async function handleDeleteAllLocations() {
+    if (!isSuperAdmin) {
+      setError("Only super admin can delete all locations.");
+      return;
+    }
+    if (!deleteAllConfirmed || deletingAll) return;
+    setDeletingAll(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/states", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ all: true }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data.error as string) || "Failed to delete all locations.");
+        return;
+      }
+
+      setShowDeleteAllModal(false);
+      setDeleteAllConfirmed(false);
+      setSelectedState("");
+      setSelectedCity("");
+      setSelectedLocalArea("");
+      setNewCityName("");
+      setNewLocalAreaName("");
+      setSuccess(
+        (data.message as string) ||
+          "All states, cities, and local areas have been permanently deleted."
+      );
+      setStates([]);
+      setCities([]);
+      setAllLocalAreas([]);
+      await load(true);
+    } catch {
+      setError("An error occurred while deleting all locations.");
+    } finally {
+      setDeletingAll(false);
+    }
+  }
+
+  // Delete All Local Areas Handler
+  async function handleDeleteAllLocalAreas() {
+    if (!isSuperAdmin) {
+      setError("Only super admin can delete all local areas.");
+      return;
+    }
+    if (!deleteAllAreasConfirmed || deletingAllAreas) return;
+    setDeletingAllAreas(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/local-areas?all=true", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ all: true }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data.error as string) || "Failed to delete all local areas.");
+        return;
+      }
+
+      setShowDeleteAllAreasModal(false);
+      setDeleteAllAreasConfirmed(false);
+      setSelectedLocalArea("");
+      setNewLocalAreaName("");
+      setSuccess(
+        (data.message as string) ||
+          "All local areas have been permanently deleted."
+      );
+      setAllLocalAreas([]);
+      await load(true);
+    } catch {
+      setError("An error occurred while deleting all local areas.");
+    } finally {
+      setDeletingAllAreas(false);
+    }
+  }
+
+  // Cascading Selector Handlers
+  function handleStateSelect(newState: string) {
+    setSelectedState(newState);
+    setSelectedCity("");
+    setSelectedLocalArea("");
+    setNewCityName("");
+    setNewLocalAreaName("");
+    setError("");
+  }
+
+  function handleCitySelect(newCity: string) {
+    setSelectedCity(newCity);
+    setSelectedLocalArea("");
+    setNewLocalAreaName("");
+    setNewCityName("");
+    setError("");
+  }
+
+  function handleLocalAreaSelect(newArea: string) {
+    setSelectedLocalArea(newArea);
+    setNewLocalAreaName("");
+    setError("");
+  }
+
+  // Inline Add City Handler (triggered when + Add City is selected)
+  async function handleInlineAddCity(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = newCityName.trim();
+    if (!selectedState || !trimmed || creatingCity) return;
+    setCreatingCity(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/cities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: trimmed,
+          state: selectedState,
+          region: selectedState,
+          country: "India",
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data.error as string) || "Failed to create city.");
+        return;
+      }
+
+      const createdCity = data.city as CityRow | undefined;
+      const targetCityName = createdCity?.name || trimmed;
+      if (createdCity) {
+        setCities((prev) => {
+          const exists = prev.some(
+            (c) =>
+              c.name.trim().toLowerCase() === targetCityName.trim().toLowerCase() &&
+              (!selectedState || !c.state || c.state.trim().toLowerCase() === selectedState.trim().toLowerCase())
+          );
+          return exists ? prev : [...prev, createdCity];
+        });
+      }
+      setSuccess(`City "${targetCityName}" created successfully in ${selectedState}.`);
+      setNewCityName("");
+      // Expand the state where city was added so admin sees it immediately
+      setExpandedStates((prev) => new Set(prev).add(selectedState));
+      // Select the newly created city and close inline form
+      setSelectedCity(targetCityName);
+      setSelectedLocalArea("");
+      await load(true);
+      setSelectedCity(targetCityName);
+    } catch {
+      setError("An error occurred while creating city.");
+    } finally {
+      setCreatingCity(false);
+    }
+  }
+
+  // Inline Add Local Area Handler (triggered when + Add Local Area is selected)
+  async function handleInlineAddLocalArea(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = newLocalAreaName.trim();
+    if (
+      !selectedState ||
+      !selectedCity ||
+      selectedCity === ADD_CITY_VALUE ||
+      !trimmed ||
+      creatingLocalArea
+    ) {
+      return;
+    }
+    setCreatingLocalArea(true);
+    setError("");
+    setSuccess("");
+
+    const matchedCity = cities.find(
+      (c) =>
+        c.name.trim().toLowerCase() === selectedCity.trim().toLowerCase() &&
+        (!selectedState || !c.state || c.state.trim().toLowerCase() === selectedState.trim().toLowerCase())
+    );
+
+    try {
+      const res = await fetch("/api/admin/local-areas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: trimmed,
+          cityName: matchedCity?.name || selectedCity,
+          stateName: selectedState,
+          citySlug: matchedCity?.slug,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data.error as string) || "Failed to add local area.");
+        return;
+      }
+
+      const createdArea = data.localArea as LocalAreaRow | undefined;
+      const targetAreaName = createdArea?.name || trimmed;
+      if (createdArea) {
+        setAllLocalAreas((prev) => {
+          const exists = prev.some(
+            (a) =>
+              a.name.trim().toLowerCase() === targetAreaName.trim().toLowerCase() &&
+              a.cityName.trim().toLowerCase() === selectedCity.trim().toLowerCase()
+          );
+          return exists ? prev : [...prev, createdArea];
+        });
+      }
+      setSuccess(`Local area "${targetAreaName}" added successfully to ${selectedCity}.`);
+      setNewLocalAreaName("");
+      // Expand state and city in hierarchy
+      setExpandedStates((prev) => new Set(prev).add(selectedState));
+      setExpandedCities((prev) =>
+        new Set(prev).add(`${selectedState}-${selectedCity}`)
+      );
+      setSelectedLocalArea(targetAreaName);
+      await load(true);
+      setSelectedLocalArea(targetAreaName);
+    } catch {
+      setError("An error occurred while adding local area.");
+    } finally {
+      setCreatingLocalArea(false);
+    }
+  }
+
+  // Available Cities for currently selected State
+  const citiesForSelectedState = useMemo(() => {
+    if (!selectedState) return [];
+    const sLower = selectedState.trim().toLowerCase();
+    const sNorm = normalizeState(selectedState);
+    const sSlug = slugify(selectedState);
+    return cities.filter((c) => {
+      if (!c.state) return false;
+      const cLower = c.state.trim().toLowerCase();
+      return (
+        cLower === sLower ||
+        normalizeState(c.state) === sNorm ||
+        slugify(c.state) === sSlug
+      );
+    });
+  }, [cities, selectedState]);
+
+  // Available Local Areas for currently selected City & State
+  const areasForSelectedCity = useMemo(() => {
+    if (!selectedCity || selectedCity === ADD_CITY_VALUE) return [];
+    const cLower = selectedCity.trim().toLowerCase();
+    const cSlug = slugify(selectedCity);
+    const sLower = selectedState.trim().toLowerCase();
+    const sNorm = normalizeState(selectedState);
+    const sSlug = slugify(selectedState);
+    return allLocalAreas.filter((a) => {
+      const aCity = a.cityName ? a.cityName.trim().toLowerCase() : "";
+      const aCitySlug = (a.citySlug || "").toLowerCase();
+      const cityMatch =
+        aCity === cLower ||
+        (aCitySlug && (aCitySlug === cSlug || aCitySlug === cLower)) ||
+        slugify(a.cityName) === cSlug;
+      if (!cityMatch) return false;
+
+      if (!a.stateName || !selectedState) return true;
+      const aStateLower = a.stateName.trim().toLowerCase();
+      return (
+        aStateLower === sLower ||
+        normalizeState(a.stateName) === sNorm ||
+        slugify(a.stateName) === sSlug
+      );
+    });
+  }, [allLocalAreas, selectedCity, selectedState]);
+
+  // Download Location Backup Handler
+  async function handleDownloadBackup() {
+    if (downloadingBackup) return;
+    setDownloadingBackup(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await fetch("/api/admin/states/export", {
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        setError((errData.error as string) || "Failed to download location backup.");
+        return;
+      }
+
+      const blob = await res.blob();
+      const today = new Date().toISOString().split("T")[0];
+      const filename = `rojlo-locations-seo-backup-${today}.json`;
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      setSuccess("Location & SEO JSON data downloaded successfully.");
+    } catch {
+      setError("An error occurred while downloading locations and SEO JSON.");
+    } finally {
+      setDownloadingBackup(false);
+    }
+  }
+
+  const isSearching = debouncedSearch.length > 0;
+
+  return (
+    <main className="p-4 sm:p-6 lg:p-10 min-w-0">
+      {/* Page Header */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-black text-gray-950">States & Locations</h1>
+          <p className="mt-2 text-gray-900">
+            Add states, manage cities, and manage local areas within each city.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-full bg-gray-600 px-4 py-2 text-sm font-semibold text-white">
+            Total States: {states.length}
+          </span>
+          <span className="rounded-full bg-gray-100 px-4 py-2 text-sm font-semibold text-gray-950">
+            Total Cities: {cities.length}
+          </span>
+          <span className="rounded-full bg-gray-100 px-4 py-2 text-sm font-semibold text-gray-950">
+            Total Areas: {allLocalAreas.length}
+          </span>
+          {isSuperAdmin && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteAllAreasModal(true);
+                  setDeleteAllAreasConfirmed(false);
+                }}
+                className="rounded-full bg-amber-600 !text-white px-4 py-2 text-xs font-bold hover:bg-amber-700 transition-colors cursor-pointer"
+              >
+                Delete All Local Areas
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteAllModal(true);
+                  setDeleteAllConfirmed(false);
+                }}
+                className="rounded-full bg-red-600 !text-white px-4 py-2 text-xs font-bold hover:bg-red-700 transition-colors cursor-pointer"
+              >
+                Delete All Locations
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Search Bar + Controls */}
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="relative w-full sm:w-80">
+          <input
+            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-gray-950 outline-none focus:border-gray-500 placeholder:text-gray-400"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Fuzzy search State, City, or Area..."
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="absolute right-3 top-2.5 text-xs font-bold text-gray-500 hover:text-gray-800"
+              title="Clear search"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleExpandAll}
+            className="rounded-full border border-gray-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-gray-900 hover:bg-gray-50"
+          >
+            Expand All
+          </button>
+          <button
+            type="button"
+            onClick={handleCollapseAll}
+            className="rounded-full border border-gray-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-gray-900 hover:bg-gray-50"
+          >
+            Collapse All
+          </button>
+        </div>
+      </div>
+
+      {/* Add State Form + Upload JSON Button */}
+      <form
+        onSubmit={addState}
+        className="mt-6 flex flex-col gap-3 rounded-2xl border border-gray-100 bg-white p-4 sm:p-5 lg:flex-row lg:items-end"
+      >
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium text-gray-900">
+            New State
+          </span>
+          <input
+            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-gray-950 outline-none focus:border-gray-500"
+            value={stateName}
+            onChange={(e) => setStateName(e.target.value)}
+            placeholder="State name"
+            required
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={submitting || loading}
+          className="inline-flex items-center justify-center gap-2 rounded-full bg-gray-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+        >
+          {submitting ? (
+            <>
+              <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+              </svg>
+              <span>Adding State...</span>
+            </>
+          ) : (
+            <span>Add State</span>
+          )}
+        </button>
+        <div className="flex flex-wrap gap-2">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            accept=".json,application/json"
+            className="hidden"
+          />
+          <button
+            type="button"
+            disabled={importing}
+            onClick={() => fileInputRef.current?.click()}
+            className="rounded-full bg-gray-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {importing ? "Processing..." : "Upload JSON"}
+          </button>
+          <button
+            type="button"
+            disabled={downloadingBackup || loading}
+            onClick={handleDownloadBackup}
+            className="rounded-full border border-gray-300 bg-gray-50 px-4 py-2.5 text-sm font-semibold text-gray-950 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {downloadingBackup ? "Exporting..." : "Download JSON"}
+          </button>
+        </div>
+      </form>
+
+      {/* Cascading Location Selector + Inline Creation Options */}
+      <section className="mt-4 rounded-2xl border border-gray-100 bg-white p-5 shadow-xs">
+        <h2 className="text-base font-bold text-gray-950 mb-3">Location Selector</h2>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {/* 1. State Dropdown */}
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-900">
+              State
+            </span>
+            <select
+              className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-950 outline-none focus:border-gray-500"
+              value={selectedState}
+              onChange={(e) => handleStateSelect(e.target.value)}
+            >
+              <option value="">-- Select State --</option>
+              {states.map((s) => (
+                <option key={s._id ?? s.slug} value={s.name}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {/* 2. City Dropdown */}
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-900">
+              City
+            </span>
+            <select
+              className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-950 outline-none focus:border-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              value={selectedCity}
+              onChange={(e) => handleCitySelect(e.target.value)}
+              disabled={!selectedState}
+            >
+              <option value="">
+                {!selectedState ? "-- Select State First --" : "-- Select City --"}
+              </option>
+              {citiesForSelectedState.map((c) => (
+                <option key={`${c.source}-${c._id}`} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+              {selectedState && (
+                <>
+                  <option disabled value="">
+                    ────────────
+                  </option>
+                  <option
+                    value={ADD_CITY_VALUE}
+                    className="font-bold text-gray-600"
+                  >
+                    + Add City
+                  </option>
+                </>
+              )}
+            </select>
+          </label>
+
+          {/* 3. Local Area Dropdown */}
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-900">
+              Local Area
+            </span>
+            <select
+              className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-950 outline-none focus:border-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              value={selectedLocalArea}
+              onChange={(e) => handleLocalAreaSelect(e.target.value)}
+              disabled={!selectedCity || selectedCity === ADD_CITY_VALUE}
+            >
+              <option value="">
+                {!selectedCity || selectedCity === ADD_CITY_VALUE
+                  ? "-- Select City First --"
+                  : "-- Select Local Area --"}
+              </option>
+              {areasForSelectedCity.map((a) => (
+                <option key={a._id ?? a.slug} value={a.name}>
+                  {a.name}
+                </option>
+              ))}
+              {selectedCity && selectedCity !== ADD_CITY_VALUE && (
+                <>
+                  <option disabled value="">
+                    ────────────
+                  </option>
+                  <option
+                    value={ADD_LOCAL_AREA_VALUE}
+                    className="font-bold text-gray-600"
+                  >
+                    + Add Local Area
+                  </option>
+                </>
+              )}
+            </select>
+          </label>
+        </div>
+
+        {/* Inline Add City Form — Appears ONLY when + Add City is selected */}
+        {selectedCity === ADD_CITY_VALUE && (
+          <form
+            onSubmit={handleInlineAddCity}
+            className="mt-4 rounded-xl border border-gray-200 bg-gray-50/60 p-4"
+          >
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-950">
+                Add New City to <span className="text-gray-600">{selectedState}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedCity("")}
+                className="text-xs font-medium text-gray-600 hover:text-gray-900"
+              >
+                Cancel
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <input
+                className="flex-1 min-w-[200px] rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-950 outline-none focus:border-gray-500 placeholder:text-gray-400"
+                value={newCityName}
+                onChange={(e) => setNewCityName(e.target.value)}
+                placeholder="Enter city name..."
+                required
+                autoFocus
+              />
+              <button
+                type="submit"
+                disabled={creatingCity || !newCityName.trim()}
+                className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gray-600 px-5 py-2 text-xs font-semibold text-white hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {creatingCity ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                    </svg>
+                    <span>Adding City...</span>
+                  </>
+                ) : (
+                  <span>Add City</span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedCity("")}
+                className="rounded-full border border-gray-200 bg-white px-4 py-2 text-xs font-semibold text-gray-950 hover:bg-gray-100 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* Inline Add Local Area Form — Appears ONLY when + Add Local Area is selected */}
+        {selectedLocalArea === ADD_LOCAL_AREA_VALUE && (
+          <form
+            onSubmit={handleInlineAddLocalArea}
+            className="mt-4 rounded-xl border border-gray-200 bg-gray-50/60 p-4"
+          >
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-950">
+                Add New Local Area to <span className="text-gray-600">{selectedCity}</span>, {selectedState}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedLocalArea("")}
+                className="text-xs font-medium text-gray-600 hover:text-gray-900"
+              >
+                Cancel
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <input
+                className="flex-1 min-w-[200px] rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-950 outline-none focus:border-gray-500 placeholder:text-gray-400"
+                value={newLocalAreaName}
+                onChange={(e) => setNewLocalAreaName(e.target.value)}
+                placeholder="Enter local area name..."
+                required
+                autoFocus
+              />
+              <button
+                type="submit"
+                disabled={creatingLocalArea || !newLocalAreaName.trim()}
+                className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gray-600 px-5 py-2 text-xs font-semibold text-white hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {creatingLocalArea ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                    </svg>
+                    <span>Adding Local Area...</span>
+                  </>
+                ) : (
+                  <span>Add Local Area</span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedLocalArea("")}
+                className="rounded-full border border-gray-200 bg-white px-4 py-2 text-xs font-semibold text-gray-950 hover:bg-gray-100 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+      </section>
+
+      {/* Feedback Messages */}
+      {error && <p className="mt-4 text-sm font-medium text-gray-700">{error}</p>}
+      {success && <p className="mt-4 text-sm font-medium text-gray-700">{success}</p>}
+
+      {/* JSON Import Confirmation Modal */}
+      {importSummary && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs animate-modal-backdrop">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl animate-modal-content">
+            <h3 className="text-xl font-black text-gray-950">Confirm JSON Import</h3>
+            <p className="mt-2 text-sm text-gray-900">
+              The JSON file was successfully validated. Review the detected locations below:
+            </p>
+            <div className="mt-4 space-y-2 rounded-xl bg-gray-50 p-4 text-sm text-gray-950">
+              <div className="flex justify-between">
+                <span>States:</span>
+                <span className="font-bold">
+                  {importSummary.totalStates} ({importSummary.newStates} new
+                  {importSummary.stateSeoCount ? `, ${importSummary.stateSeoCount} with SEO` : ""})
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Cities:</span>
+                <span className="font-bold">
+                  {importSummary.totalCities} ({importSummary.newCities} new
+                  {importSummary.citySeoCount ? `, ${importSummary.citySeoCount} with SEO` : ""})
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Local Areas:</span>
+                <span className="font-bold">
+                  {importSummary.totalLocalAreas} ({importSummary.newLocalAreas} new
+                  {importSummary.localAreaSeoCount ? `, ${importSummary.localAreaSeoCount} with SEO` : ""})
+                </span>
+              </div>
+              {(Boolean(importSummary.stateSeoCount || importSummary.citySeoCount || importSummary.localAreaSeoCount)) && (
+                <div className="pt-2 border-t border-gray-200 text-xs text-green-700 font-semibold flex items-center gap-1.5">
+                  <span className="text-sm">✓</span>
+                  <span>
+                    Detected SEO content:{" "}
+                    {[
+                      importSummary.stateSeoCount ? `${importSummary.stateSeoCount} states` : "",
+                      importSummary.citySeoCount ? `${importSummary.citySeoCount} cities` : "",
+                      importSummary.localAreaSeoCount ? `${importSummary.localAreaSeoCount} local areas` : "",
+                    ]
+                      .filter(Boolean)
+                      .join(", ")}
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={importing}
+                onClick={cancelImport}
+                className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-950 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={importing}
+                onClick={confirmImport}
+                className="rounded-full bg-gray-600 px-5 py-2 text-sm font-semibold text-white hover:bg-gray-700 disabled:opacity-50"
+              >
+                {importing ? "Importing..." : "Confirm & Import"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All Locations Double-Confirmation Modal */}
+      {isSuperAdmin && showDeleteAllModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-modal-backdrop">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border-2 border-gray-200 animate-modal-content">
+            <div className="flex items-center gap-2 text-gray-700">
+              <span className="text-xl">⚠️</span>
+              <h3 className="text-xl font-black text-gray-950">Delete All Locations?</h3>
+            </div>
+
+            <p className="mt-3 text-sm text-gray-900">
+              This is a permanent destructive action. It will immediately and irreversibly delete:
+            </p>
+
+            <ul className="mt-3 space-y-1.5 rounded-xl bg-gray-50 p-3.5 text-sm text-gray-950 border border-gray-200">
+              <li className="flex justify-between">
+                <span>• All States:</span>
+                <span className="font-bold text-gray-700">{states.length}</span>
+              </li>
+              <li className="flex justify-between">
+                <span>• All Cities:</span>
+                <span className="font-bold text-gray-700">{cities.length}</span>
+              </li>
+              <li className="flex justify-between">
+                <span>• All Local Areas:</span>
+                <span className="font-bold text-gray-700">{allLocalAreas.length}</span>
+              </li>
+            </ul>
+
+            <p className="mt-3 text-xs font-semibold text-gray-700">
+              This action cannot be undone. All user-facing location dropdowns, listings, and places will have zero locations until new data is imported.
+            </p>
+
+            {/* Explicit double-confirmation checkbox */}
+            <label className="mt-4 flex items-start gap-2.5 rounded-lg border border-gray-200 bg-gray-50/50 p-3 text-xs font-medium text-gray-950 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deleteAllConfirmed}
+                onChange={(e) => setDeleteAllConfirmed(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-gray-600 focus:ring-gray-500"
+              />
+              <span>
+                I understand that all states, cities, and local areas will be permanently deleted.
+              </span>
+            </label>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={deletingAll}
+                onClick={() => {
+                  setShowDeleteAllModal(false);
+                  setDeleteAllConfirmed(false);
+                }}
+                className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-950 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!deleteAllConfirmed || deletingAll}
+                onClick={handleDeleteAllLocations}
+                className="rounded-full bg-red-600 !text-white px-5 py-2 text-sm font-semibold hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {deletingAll ? "Deleting Everything..." : "Delete Everything"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All Local Areas Confirmation Modal */}
+      {isSuperAdmin && showDeleteAllAreasModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-modal-backdrop">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border-2 border-gray-200 animate-modal-content">
+            <div className="flex items-center gap-2 text-amber-600">
+              <span className="text-xl">⚠️</span>
+              <h3 className="text-xl font-black text-gray-950">Delete All Local Areas?</h3>
+            </div>
+
+            <p className="mt-3 text-sm text-gray-900">
+              This will permanently delete all local areas registered across all cities:
+            </p>
+
+            <ul className="mt-3 space-y-1.5 rounded-xl bg-amber-50/50 p-3.5 text-sm text-gray-950 border border-amber-200">
+              <li className="flex justify-between">
+                <span>• Total Local Areas to remove:</span>
+                <span className="font-bold text-amber-800">{allLocalAreas.length}</span>
+              </li>
+              <li className="flex justify-between text-xs text-gray-600">
+                <span>• States &amp; Cities affected:</span>
+                <span className="font-medium text-green-700">None (States &amp; Cities kept)</span>
+              </li>
+            </ul>
+
+            <p className="mt-3 text-xs font-semibold text-gray-700">
+              This action cannot be undone. All local area listings and individual local area SEO data will be cleared, while all states and cities remain intact.
+            </p>
+
+            {/* Explicit double-confirmation checkbox */}
+            <label className="mt-4 flex items-start gap-2.5 rounded-lg border border-gray-200 bg-gray-50/50 p-3 text-xs font-medium text-gray-950 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deleteAllAreasConfirmed}
+                onChange={(e) => setDeleteAllAreasConfirmed(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+              />
+              <span>
+                I understand that all local areas will be permanently deleted.
+              </span>
+            </label>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={deletingAllAreas}
+                onClick={() => {
+                  setShowDeleteAllAreasModal(false);
+                  setDeleteAllAreasConfirmed(false);
+                }}
+                className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-950 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!deleteAllAreasConfirmed || deletingAllAreas}
+                onClick={handleDeleteAllLocalAreas}
+                className="rounded-full bg-amber-600 !text-white px-5 py-2 text-sm font-semibold hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {deletingAllAreas ? "Deleting Areas..." : "Delete All Areas"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hierarchical States, Cities & Local Areas Cards */}
+      <div className="mt-8">
+        <h2 className="text-xl font-black text-gray-950 mb-4">
+          All States, Cities & Local Areas
+          {isSearching && (
+            <span className="ml-2 text-xs font-normal text-gray-700">
+              (Filtered by: &ldquo;{debouncedSearch}&rdquo;)
+            </span>
+          )}
+        </h2>
+
+        {loading ? (
+          <AdminStateHierarchySkeleton />
+        ) : states.length === 0 ? (
+          <p className="text-gray-900">No states added yet.</p>
+        ) : filteredHierarchy.length === 0 ? (
+          <p className="text-gray-900">No matching states, cities, or local areas.</p>
+        ) : (
+          <div className="space-y-4">
+            {filteredHierarchy.map(({ state, stateKey, matchingCities }) => {
+              // Auto-expand if search query active, otherwise check manual state set
+              const isStateExpanded =
+                isSearching || expandedStates.has(stateKey);
+
+              return (
+                <StateHierarchyCard
+                  key={stateKey}
+                  state={state}
+                  isExpanded={isStateExpanded}
+                  isSearching={isSearching}
+                  matchingCities={matchingCities}
+                  expandedCities={expandedCities}
+                  isDeletingState={deletingStateId === (state._id || state.slug || state.name)}
+                  deletingCityId={deletingCityId}
+                  deletingAreaId={deletingAreaId}
+                  onToggleState={() => toggleState(stateKey)}
+                  onToggleCity={toggleCity}
+                  onDeleteCity={handleDeleteCity}
+                  onDeleteLocalArea={handleDeleteLocalArea}
+                  onChanged={() => load(true)}
+                  onRemoveState={removeState}
+                  onUpdateStateName={handleUpdateStateName}
+                  onUpdateCityName={handleUpdateCityName}
+                  onUpdateLocalAreaName={handleUpdateLocalAreaName}
+                  onCityAdded={handleCityAdded}
+                  onAreaAdded={handleAreaAdded}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}
+
+function InlineEditableName({
+  value,
+  onSave,
+  className = "",
+  inputClassName = "",
+  title = "Click to edit name",
+  tag: Tag = "span",
+  showPencil = true,
+}: {
+  value: string;
+  onSave: (newName: string) => Promise<void> | void;
+  className?: string;
+  inputClassName?: string;
+  title?: string;
+  tag?: "span" | "h2" | "div";
+  showPencil?: boolean;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [text, setText] = useState(value);
+  const [prevValue, setPrevValue] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  if (value !== prevValue) {
+    setPrevValue(value);
+    if (!isEditing) {
+      setText(value);
+    }
+  }
+
+  useEffect(() => {
+    if (isEditing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [isEditing]);
+
+  const commit = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed === value.trim()) {
+      setText(value);
+      setIsEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(trimmed);
+    } catch {
+      setText(value);
+    } finally {
+      setSaving(false);
+      setIsEditing(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.currentTarget.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setText(value);
+      setIsEditing(false);
+    }
+  };
+
+  if (isEditing) {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5"
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <input
+          ref={inputRef}
+          value={text}
+          disabled={saving}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={commit}
+          className={`rounded-lg border-2 border-blue-500 bg-white px-2 py-0.5 outline-none shadow-xs text-gray-950 font-medium ${inputClassName}`}
+        />
+        {saving && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-blue-600 font-semibold shrink-0 animate-pulse">
+            <svg className="animate-spin h-3.5 w-3.5 text-blue-600" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            Saving...
+          </span>
+        )}
+      </span>
+    );
+  }
+
+  return (
+    <Tag
+      onClick={(e) => {
+        e.stopPropagation();
+        setIsEditing(true);
+      }}
+      title={title}
+      className={`group/edit cursor-pointer inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-gray-100 transition-colors ${className}`}
+    >
+      <span>{value}</span>
+      {showPencil && (
+        <svg
+          className="w-3.5 h-3.5 text-gray-400 group-hover/edit:text-blue-600 transition-colors opacity-60 group-hover/edit:opacity-100 shrink-0"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+          />
+        </svg>
+      )}
+    </Tag>
+  );
+}
+
+function StateHierarchyCard({
+  state,
+  isExpanded,
+  isSearching,
+  matchingCities,
+  expandedCities,
+  isDeletingState = false,
+  deletingCityId: externalDeletingCityId = null,
+  deletingAreaId = null,
+  onToggleState,
+  onToggleCity,
+  onDeleteCity,
+  onDeleteLocalArea,
+  onChanged,
+  onRemoveState,
+  onUpdateStateName,
+  onUpdateCityName,
+  onUpdateLocalAreaName,
+  onCityAdded,
+  onAreaAdded,
+}: {
+  state: StateRecord;
+  isExpanded: boolean;
+  isSearching: boolean;
+  matchingCities: Array<{
+    city: CityRow;
+    cityKey: string;
+    cityMatches: boolean;
+    cityAreas: LocalAreaRow[];
+    matchingAreas: LocalAreaRow[];
+    hasAreaMatch: boolean;
+  }>;
+  expandedCities: Set<string>;
+  isDeletingState?: boolean;
+  deletingCityId?: string | null;
+  deletingAreaId?: string | null;
+  onToggleState: () => void;
+  onToggleCity: (cityKey: string) => void;
+  onDeleteCity?: (id?: string, cityName?: string, stateName?: string) => Promise<void> | void;
+  onDeleteLocalArea: (id?: string, cityName?: string, name?: string) => Promise<void>;
+  onChanged: (silent?: boolean) => Promise<void> | void;
+  onRemoveState: (id?: string) => void;
+  onUpdateStateName: (id: string, oldName: string, newName: string) => Promise<void>;
+  onUpdateCityName: (id: string, oldName: string, stateName: string, newName: string) => Promise<void>;
+  onUpdateLocalAreaName: (id: string | undefined, oldName: string, cityName: string, newName: string) => Promise<void>;
+  onCityAdded?: (city: CityRow) => void;
+  onAreaAdded?: (area: LocalAreaRow) => void;
+}) {
+  const [cityName, setCityName] = useState("");
+  const [country, setCountry] = useState("India");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [deletingCityId, setDeletingCityId] = useState<string | null>(null);
+  const activeDeletingCityId = externalDeletingCityId ?? deletingCityId;
+
+  const totalAreasInState = matchingCities.reduce(
+    (acc, curr) => acc + curr.cityAreas.length,
+    0
+  );
+
+  async function addCity(e: React.FormEvent) {
+    e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const res = await fetch("/api/admin/cities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: cityName.trim(),
+          country,
+          state: state.name,
+        }),
+      });
+      const data = await res.json().catch(() => ({} as Record<string, unknown>));
+      if (!res.ok) {
+        setError((data.error as string) || "Failed to add city.");
+        return;
+      }
+      const createdCity = data.city as CityRow | undefined;
+      if (createdCity && onCityAdded) {
+        onCityAdded(createdCity);
+      }
+      setCityName("");
+      setCountry("India");
+      await onChanged(true);
+    } catch {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function removeCity(id?: string) {
+    if (!id) return;
+    if (!confirm("Delete this city?")) return;
+    setDeletingCityId(id);
+    try {
+      const res = await fetch("/api/admin/cities", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError((data.error as string) || "Failed to delete city.");
+        return;
+      }
+      await onChanged(true);
+    } catch {
+      setError("Failed to delete city.");
+    } finally {
+      setDeletingCityId(null);
+    }
+  }
+
+  return (
+    <section
+      className={`rounded-2xl border border-gray-100 bg-white p-5 shadow-xs transition-all duration-200 hover:shadow-sm ${
+        isDeletingState ? "opacity-40 pointer-events-none scale-[0.99]" : "opacity-100"
+      }`}
+    >
+      {/* State Header with Accessible Collapse/Expand Button */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <button
+            type="button"
+            onClick={onToggleState}
+            aria-expanded={isExpanded}
+            aria-label={`Toggle ${state.name}`}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 text-xs font-bold text-gray-950 transition-colors hover:bg-gray-100"
+          >
+            {isExpanded ? "▼" : "▶"}
+          </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <InlineEditableName
+                tag="h2"
+                value={state.name}
+                onSave={(newName) =>
+                  onUpdateStateName(state._id || state.slug || state.name, state.name, newName)
+                }
+                className="text-xl font-black text-gray-950 hover:text-blue-600"
+                inputClassName="text-lg font-black min-w-[180px]"
+                title="Click to edit state name"
+              />
+              <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-semibold text-gray-900">
+                {matchingCities.length} {matchingCities.length === 1 ? "City" : "Cities"}
+              </span>
+              {totalAreasInState > 0 && (
+                <span className="rounded-full bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-800">
+                  {totalAreasInState} {totalAreasInState === 1 ? "Area" : "Areas"}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          disabled={isDeletingState}
+          onClick={() => onRemoveState(state._id || state.slug || state.name)}
+          className="inline-flex items-center gap-1.5 rounded-full bg-red-600 !text-white px-3 py-1.5 text-xs font-semibold hover:bg-red-700 disabled:opacity-50 transition-all shadow-xs"
+        >
+          {isDeletingState ? (
+            <>
+              <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+              </svg>
+              <span>Deleting State...</span>
+            </>
+          ) : (
+            <span>Delete State</span>
+          )}
+        </button>
+      </div>
+
+      {/* Collapsible Content: Add City Form + Cities List */}
+      {isExpanded && (
+        <div className="mt-5 border-t border-gray-100 pt-4">
+          {/* Add City Form */}
+          <form onSubmit={addCity} className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-900">
+                City Name
+              </span>
+              <input
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-gray-950 outline-none focus:border-gray-500 text-sm"
+                value={cityName}
+                onChange={(e) => setCityName(e.target.value)}
+                placeholder="City name"
+                required
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-gray-900">
+                Country
+              </span>
+              <select
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-gray-950 outline-none focus:border-gray-500 text-sm"
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+                required
+              >
+                {COUNTRY_OPTIONS.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex items-end sm:col-span-2">
+              <button
+                type="submit"
+                disabled={submitting}
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-gray-600 px-5 py-2 text-xs font-semibold text-white hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-xs"
+              >
+                {submitting ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                    </svg>
+                    <span>Adding City...</span>
+                  </>
+                ) : (
+                  <span>Add City</span>
+                )}
+              </button>
+            </div>
+          </form>
+
+          {error && (
+            <p className="mt-3 text-sm font-medium text-gray-700">{error}</p>
+          )}
+
+          {/* Cities & Local Areas List */}
+          <div className="mt-5 space-y-3">
+            {matchingCities.length === 0 ? (
+              <p className="text-xs text-gray-900 italic">No cities in this state yet.</p>
+            ) : (
+              matchingCities.map(
+                ({
+                  city,
+                  cityKey,
+                  cityAreas,
+                  hasAreaMatch,
+                }) => {
+                  const isCityExpanded =
+                    (isSearching && hasAreaMatch) ||
+                    expandedCities.has(cityKey);
+
+                  return (
+                    <CityHierarchyItem
+                      key={`${city.source}-${city._id || city.name}`}
+                      city={city}
+                      stateName={state.name}
+                      cityAreas={cityAreas}
+                      isExpanded={isCityExpanded}
+                      isDeletingCity={activeDeletingCityId === (city._id || city.slug || city.name)}
+                      deletingAreaId={deletingAreaId}
+                      onToggleCity={() => onToggleCity(cityKey)}
+                      onDeleteCity={() =>
+                        onDeleteCity
+                          ? onDeleteCity(city._id || city.slug || city.name, city.name, state.name)
+                          : removeCity(city._id || city.name)
+                      }
+                      onDeleteLocalArea={onDeleteLocalArea}
+                      onChanged={onChanged}
+                      onUpdateCityName={onUpdateCityName}
+                      onUpdateLocalAreaName={onUpdateLocalAreaName}
+                      onAreaAdded={onAreaAdded}
+                    />
+                  );
+                }
+              )
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CityHierarchyItem({
+  city,
+  stateName,
+  cityAreas,
+  isExpanded,
+  isDeletingCity = false,
+  deletingAreaId = null,
+  onToggleCity,
+  onDeleteCity,
+  onDeleteLocalArea,
+  onChanged,
+  onUpdateCityName,
+  onUpdateLocalAreaName,
+  onAreaAdded,
+}: {
+  city: CityRow;
+  stateName: string;
+  cityAreas: LocalAreaRow[];
+  isExpanded: boolean;
+  isDeletingCity?: boolean;
+  deletingAreaId?: string | null;
+  onToggleCity: () => void;
+  onDeleteCity: () => void;
+  onDeleteLocalArea: (id?: string, cityName?: string, name?: string) => Promise<void>;
+  onChanged: (silent?: boolean) => Promise<void> | void;
+  onUpdateCityName: (id: string, oldName: string, stateName: string, newName: string) => Promise<void>;
+  onUpdateLocalAreaName: (id: string | undefined, oldName: string, cityName: string, newName: string) => Promise<void>;
+  onAreaAdded?: (area: LocalAreaRow) => void;
+}) {
+  const [newArea, setNewArea] = useState("");
+  const [addingArea, setAddingArea] = useState(false);
+  const [areaError, setAreaError] = useState("");
+
+  async function handleAddArea(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newArea.trim() || addingArea) return;
+    setAddingArea(true);
+    setAreaError("");
+    try {
+      const res = await fetch("/api/admin/local-areas", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: newArea.trim(),
+          cityName: city.name,
+          stateName,
+          citySlug: city.slug,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAreaError((data.error as string) || "Failed to add local area.");
+        return;
+      }
+      const createdArea = data.localArea as LocalAreaRow | undefined;
+      if (createdArea && onAreaAdded) {
+        onAreaAdded(createdArea);
+      }
+      setNewArea("");
+      await onChanged(true);
+    } catch {
+      setAreaError("Failed to add local area.");
+    } finally {
+      setAddingArea(false);
+    }
+  }
+
+  return (
+    <div
+      className={`rounded-xl border border-gray-100 bg-gray-50/40 p-3.5 transition-all duration-200 ${
+        isDeletingCity ? "opacity-40 pointer-events-none scale-[0.99]" : "opacity-100"
+      }`}
+    >
+      {/* City Header with Expand/Collapse Icon */}
+      <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
+          <button
+            type="button"
+            onClick={onToggleCity}
+            aria-expanded={isExpanded}
+            aria-label={`Toggle ${city.name}`}
+            className="flex h-6 w-6 items-center justify-center rounded-md border border-gray-200 bg-white text-[10px] font-bold text-gray-950 hover:bg-gray-100"
+          >
+            {isExpanded ? "▼" : "▶"}
+          </button>
+          <InlineEditableName
+            tag="span"
+            value={city.name}
+            onSave={(newName) =>
+              onUpdateCityName(city._id || city.name, city.name, stateName, newName)
+            }
+            className="font-bold text-sm text-gray-950 hover:text-blue-600"
+            inputClassName="text-sm font-bold min-w-[140px]"
+            title="Click to edit city name"
+          />
+          <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-gray-900 border border-gray-100">
+            {cityAreas.length} {cityAreas.length === 1 ? "Area" : "Areas"}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={onDeleteCity}
+          disabled={isDeletingCity}
+          className="inline-flex items-center gap-1.5 rounded-full bg-red-600 !text-white px-2.5 py-1 text-[11px] font-semibold hover:bg-red-700 disabled:opacity-50 transition-all shadow-xs"
+        >
+          {isDeletingCity ? (
+            <>
+              <svg className="animate-spin h-3 w-3 text-white" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+              </svg>
+              <span>Deleting...</span>
+            </>
+          ) : (
+            <span>Delete City</span>
+          )}
+        </button>
+      </div>
+
+      {/* Collapsible Local Areas Section */}
+      {isExpanded && (
+        <div className="mt-3 pl-4 sm:pl-8">
+          <div className="rounded-xl border-l-2 border-gray-300 bg-gray-50/60 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-gray-950">
+                Local Areas {cityAreas.length > 0 && `(${cityAreas.length})`}
+              </h4>
+            </div>
+
+            {/* Local Areas List */}
+            {cityAreas.length === 0 ? (
+              <p className="text-xs italic text-gray-700">No local areas</p>
+            ) : (
+              <ul className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                {cityAreas.map((area) => {
+                  const areaKey = area._id || area.slug || area.name;
+                  const isDeletingThisArea = deletingAreaId === areaKey || deletingAreaId === area._id;
+                  return (
+                    <li
+                      key={area._id ?? area.slug}
+                      className={`flex items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-950 shadow-2xs transition-all duration-200 ${
+                        isDeletingThisArea ? "opacity-40 pointer-events-none" : "opacity-100"
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 min-w-0 flex-1">
+                        <span className="text-gray-400 font-bold shrink-0">•</span>
+                        <InlineEditableName
+                          tag="span"
+                          value={area.name}
+                          onSave={(newName) =>
+                            onUpdateLocalAreaName(area._id, area.name, city.name, newName)
+                          }
+                          className="font-medium text-xs text-gray-950 truncate max-w-full hover:text-blue-600"
+                          inputClassName="text-xs font-medium w-full"
+                          title="Click to edit local area name"
+                        />
+                      </span>
+                      <button
+                        type="button"
+                        disabled={isDeletingThisArea}
+                        onClick={() => onDeleteLocalArea(areaKey, city.name, area.name)}
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 !text-white hover:bg-red-700 font-bold text-xs transition-colors disabled:opacity-50"
+                        title={`Delete ${area.name}`}
+                        aria-label={`Delete ${area.name}`}
+                      >
+                        {isDeletingThisArea ? (
+                          <svg className="animate-spin h-3 w-3 text-white" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                          </svg>
+                        ) : (
+                          <span>&times;</span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {/* Quick Add Area Inline Form */}
+            <form onSubmit={handleAddArea} className="mt-3 flex flex-wrap gap-2 pt-1">
+              <input
+                className="flex-1 min-w-[180px] rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-950 outline-none focus:border-gray-500 placeholder:text-gray-400"
+                value={newArea}
+                onChange={(e) => setNewArea(e.target.value)}
+                placeholder="Local area name..."
+                required
+              />
+              <button
+                type="submit"
+                disabled={addingArea || !newArea.trim()}
+                className="inline-flex items-center justify-center gap-1.5 rounded-full bg-gray-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {addingArea ? (
+                  <>
+                    <svg className="animate-spin h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                    </svg>
+                    <span>Adding...</span>
+                  </>
+                ) : (
+                  <span>Add Local Area</span>
+                )}
+              </button>
+            </form>
+            {areaError && (
+              <p className="text-xs font-medium text-gray-700">{areaError}</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+

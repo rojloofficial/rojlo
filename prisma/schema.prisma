@@ -1,0 +1,475 @@
+datasource db {
+  provider     = "mysql"
+  url          = env("DATABASE_URL")
+  relationMode = "prisma"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// 1. Users
+// ----------------------------------------------------
+model User {
+  id            String    @id @default(cuid()) @db.VarChar(64)
+  name          String    @db.VarChar(255)
+  email         String    @unique(map: "email_unique") @db.VarChar(255)
+  phone         String?   @db.VarChar(50)
+  service       String?   @db.VarChar(100)
+  coins         Int       @default(0)
+  passwordHash  String    @map("password_hash") @db.VarChar(255)
+  sessionToken  String?   @unique(map: "session_token_idx") @map("session_token") @db.VarChar(255)
+  emailVerified Boolean   @default(false) @map("email_verified")
+  otpHash       String?   @map("otp_hash") @db.VarChar(255)
+  otpHashes     Json?     @map("otp_hashes")
+  otpExpires    DateTime? @map("otp_expires")
+  otpAttempts   Int       @default(0) @map("otp_attempts")
+  otpLastSentAt DateTime? @map("otp_last_sent_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  ads              Ad[]
+  paymentRequests  PaymentRequest[]
+  paymentHistories PaymentHistory[]
+
+  @@map("users")
+}
+
+// ----------------------------------------------------
+// 2. Ads
+// ----------------------------------------------------
+model Ad {
+  id                  String    @id @default(cuid()) @db.VarChar(64)
+  userId              String    @map("user_id") @db.VarChar(64)
+  name                String    @db.VarChar(255)
+  title               String?   @db.VarChar(255)
+  age                 String?   @db.VarChar(20)
+  category            String    @db.VarChar(100)
+  toServe             Json?     @map("to_serve")
+  placeOfService      Json?     @map("place_of_service")
+  state               String?   @db.VarChar(100)
+  city                String    @db.VarChar(100)
+  localArea           String?   @map("local_area") @db.VarChar(100)
+  pincode             String?   @db.VarChar(20)
+  phone               String    @db.VarChar(50)
+  whatsapp            String?   @db.VarChar(50)
+  telegram            String?   @db.VarChar(100)
+  about               String    @db.LongText
+  images              Json
+  status              String    @default("active") @db.VarChar(50)
+  serviceRates        Json?     @map("service_rates")
+  promoted            Boolean   @default(false)
+  isPromoted          Boolean   @default(false) @map("is_promoted")
+  promotedFrom        DateTime? @map("promoted_from")
+  promotedUntil       DateTime? @map("promoted_until")
+  promoPackage        String?   @map("promo_package") @db.VarChar(100)
+  promoTier           String?   @map("promo_tier") @db.VarChar(50)
+  promoShift          String?   @map("promo_shift") @db.VarChar(50)
+  isFreeAd            Boolean?  @map("is_free_ad")
+  isVisibleOnCityPage Boolean?  @map("is_visible_on_city_page")
+  requiresPromotion   Boolean?  @map("requires_promotion")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "user_idx")
+  @@index([userId, id], map: "user_ad_idx")
+  @@index([city, status, createdAt], map: "city_status_created_idx")
+  @@index([status, createdAt], map: "status_created_idx")
+  @@map("ads")
+}
+
+// ----------------------------------------------------
+// 3. Cities
+// ----------------------------------------------------
+model City {
+  id             String   @id @db.VarChar(64)
+  name           String   @db.VarChar(100)
+  slug           String   @db.VarChar(100)
+  state          String?  @db.VarChar(100)
+  region         String?  @db.VarChar(100)
+  country        String?  @default("India") @db.VarChar(50)
+  famousFood     String?  @default("") @map("famous_food") @db.VarChar(255)
+  seoDescription String?  @default("") @map("seo_description") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([slug])
+  @@index([state])
+  @@map("cities")
+}
+
+// ----------------------------------------------------
+// 4. States
+// ----------------------------------------------------
+model State {
+  id        String   @id @db.VarChar(64)
+  name      String   @unique @db.VarChar(100)
+  slug      String   @unique @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("states")
+}
+
+// ----------------------------------------------------
+// 5. Local Areas
+// ----------------------------------------------------
+model LocalArea {
+  id        String   @id @db.VarChar(64)
+  name      String   @db.VarChar(100)
+  slug      String   @db.VarChar(100)
+  citySlug  String   @map("city_slug") @db.VarChar(100)
+  stateSlug String   @map("state_slug") @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([slug])
+  @@index([citySlug])
+  @@index([stateSlug])
+  @@map("local_areas")
+}
+
+// ----------------------------------------------------
+// 6. City SEO
+// ----------------------------------------------------
+model CitySeo {
+  id                String   @id @db.VarChar(64)
+  slug              String   @unique(map: "city_seo_slug_idx") @db.VarChar(100)
+  urlSlug           String?  @map("url_slug") @db.VarChar(100)
+  name              String   @db.VarChar(100)
+  title             String   @db.VarChar(255)
+  description       String   @db.Text
+  canonicalUrl      String?  @map("canonical_url") @db.VarChar(255)
+  primaryKeyword    String?  @map("primary_keyword") @db.VarChar(255)
+  secondaryKeywords Json?    @map("secondary_keywords")
+  keywords          String?  @db.Text
+  longTailKeywords  Json?    @map("long_tail_keywords")
+  popularSearches   Json?    @map("popular_searches")
+  featuredImage     String?  @map("featured_image") @db.VarChar(255)
+  imageAlt          String?  @map("image_alt") @db.VarChar(255)
+  content           Json
+  faqs              Json
+  status            String   @default("published") @db.VarChar(50)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([urlSlug], map: "city_seo_urlslug_idx")
+  @@map("city_seo")
+}
+
+// ----------------------------------------------------
+// 7. State SEO
+// ----------------------------------------------------
+model StateSeo {
+  id          String   @id @db.VarChar(64)
+  slug        String   @unique @db.VarChar(100)
+  name        String   @db.VarChar(100)
+  title       String?  @db.VarChar(255)
+  description String?  @db.Text
+  keywords    String?  @db.Text
+  content     Json?
+  faqs        Json?
+  status      String   @default("published") @db.VarChar(50)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("state_seo")
+}
+
+// ----------------------------------------------------
+// 8. Local Area SEO
+// ----------------------------------------------------
+model LocalAreaSeo {
+  id          String   @id @db.VarChar(64)
+  areaSlug    String   @map("area_slug") @db.VarChar(100)
+  citySlug    String   @map("city_slug") @db.VarChar(100)
+  stateSlug   String   @map("state_slug") @db.VarChar(100)
+  mode        String   @default("inherit") @db.VarChar(50)
+  title       String?  @db.VarChar(255)
+  description String?  @db.Text
+  keywords    String?  @db.Text
+  content     Json?
+  faqs        Json?
+  status      String   @default("published") @db.VarChar(50)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([citySlug, areaSlug], map: "local_area_seo_city_area_idx")
+  @@map("local_area_seo")
+}
+
+// ----------------------------------------------------
+// 9. Static SEO
+// ----------------------------------------------------
+model StaticSeo {
+  id          String   @id @db.VarChar(64)
+  pageKey     String   @unique(map: "static_seo_pagekey_idx") @map("page_key") @db.VarChar(100)
+  title       String   @db.VarChar(255)
+  description String   @db.Text
+  keywords    String?  @db.Text
+  content     Json
+  faqs        Json
+  images      Json?
+  status      String   @default("published") @db.VarChar(50)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("static_seo")
+}
+
+// ----------------------------------------------------
+// 10. Coin Packages
+// ----------------------------------------------------
+model CoinPackage {
+  id            String   @id @db.VarChar(64)
+  coins         Int
+  price         Decimal  @db.Decimal(10, 2)
+  originalPrice Decimal  @map("original_price") @db.Decimal(10, 2)
+  breakdown     String?  @db.VarChar(100)
+  discount      String?  @db.VarChar(50)
+  label         String?  @db.VarChar(100)
+  popular       Boolean  @default(false)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("coin_packages")
+}
+
+// ----------------------------------------------------
+// 11. Promotion Packages
+// ----------------------------------------------------
+model PromotionPackage {
+  id            String   @id @db.VarChar(64)
+  title         String   @db.VarChar(100)
+  tier          String   @db.VarChar(50)
+  rankRange     String   @map("rank_range") @db.VarChar(50)
+  durationDays  Decimal  @map("duration_days") @db.Decimal(6, 2)
+  durationHours Int      @map("duration_hours")
+  coinsCost     Int      @map("coins_cost")
+  tag           String?  @db.VarChar(50)
+  highlight     Boolean  @default(false)
+  features      Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("promotion_packages")
+}
+
+// ----------------------------------------------------
+// 12. Coupons
+// ----------------------------------------------------
+model Coupon {
+  id              String    @id @db.VarChar(64)
+  code            String    @unique @db.VarChar(50)
+  discountPercent Decimal   @map("discount_percent") @db.Decimal(5, 2)
+  maxDiscount     Decimal?  @map("max_discount") @db.Decimal(10, 2)
+  minAmount       Decimal?  @map("min_amount") @db.Decimal(10, 2)
+  active          Boolean   @default(true)
+  expiresAt       DateTime? @map("expires_at")
+  usageLimit      Int?      @map("usage_limit")
+  usedCount       Int       @default(0) @map("used_count")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@map("coupons")
+}
+
+// ----------------------------------------------------
+// 13. Payment Requests
+// ----------------------------------------------------
+model PaymentRequest {
+  id             String   @id @db.VarChar(64)
+  userId         String   @map("user_id") @db.VarChar(64)
+  userEmail      String   @map("user_email") @db.VarChar(255)
+  userName       String   @map("user_name") @db.VarChar(255)
+  userPhone      String?  @map("user_phone") @db.VarChar(50)
+  packageId      String?  @map("package_id") @db.VarChar(64)
+  coins          Int
+  amount         Decimal  @db.Decimal(10, 2)
+  discount       Decimal  @default(0) @db.Decimal(10, 2)
+  finalAmount    Decimal  @map("final_amount") @db.Decimal(10, 2)
+  couponCode     String?  @map("coupon_code") @db.VarChar(50)
+  upiId          String   @map("upi_id") @db.VarChar(100)
+  upiName        String?  @map("upi_name") @db.VarChar(100)
+  transactionId  String   @unique(map: "transactionId_1") @map("transaction_id") @db.VarChar(100)
+  screenshotUrl  String?  @map("screenshot_url") @db.VarChar(500)
+  status         String   @default("pending") @db.VarChar(50)
+  declinedReason String?  @map("declined_reason") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt], map: "createdAt_-1")
+  @@index([userId], map: "userId_1")
+  @@index([userEmail], map: "userEmail_1")
+  @@map("payment_requests")
+}
+
+// ----------------------------------------------------
+// 14. Payment History
+// ----------------------------------------------------
+model PaymentHistory {
+  id            String   @id @db.VarChar(64)
+  userId        String   @map("user_id") @db.VarChar(64)
+  userEmail     String   @map("user_email") @db.VarChar(255)
+  userName      String   @map("user_name") @db.VarChar(255)
+  userPhone     String?  @map("user_phone") @db.VarChar(50)
+  packageId     String?  @map("package_id") @db.VarChar(64)
+  coins         Int
+  amount        Decimal  @db.Decimal(10, 2)
+  discount      Decimal  @default(0) @db.Decimal(10, 2)
+  finalAmount   Decimal  @map("final_amount") @db.Decimal(10, 2)
+  couponCode    String?  @map("coupon_code") @db.VarChar(50)
+  upiId         String   @map("upi_id") @db.VarChar(100)
+  transactionId String   @map("transaction_id") @db.VarChar(100)
+  action        String   @db.VarChar(50)
+  performedBy   String?  @map("performed_by") @db.VarChar(100)
+  reason        String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt], map: "createdAt_-1_hist")
+  @@index([userId], map: "userId_1_hist")
+  @@index([userEmail], map: "userEmail_1_hist")
+  @@index([transactionId], map: "transactionId_1_hist")
+  @@map("payment_history")
+}
+
+// ----------------------------------------------------
+// 15. UPIs
+// ----------------------------------------------------
+model Upi {
+  id        String   @id @db.VarChar(64)
+  upiId     String   @map("upi_id") @db.VarChar(100)
+  name      String   @db.VarChar(100)
+  qrCode    String   @map("qr_code") @db.VarChar(500)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("upis")
+}
+
+// ----------------------------------------------------
+// 16. Admin Users (Sub-admins)
+// ----------------------------------------------------
+model AdminUser {
+  id           String    @id @db.VarChar(64)
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  sessionToken String?   @unique @map("session_token") @db.VarChar(255)
+  permissions  Json
+  role         String    @default("subadmin") @db.VarChar(50)
+  lastLogin    DateTime? @map("last_login")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("admin_users")
+}
+
+// ----------------------------------------------------
+// 17. VIP Users
+// ----------------------------------------------------
+model VipUser {
+  id                String    @id @db.VarChar(64)
+  email             String    @unique @db.VarChar(255)
+  phone             String?   @db.VarChar(50)
+  passwordHash      String?   @map("password_hash") @db.VarChar(255)
+  setupToken        String?   @map("setup_token") @db.VarChar(255)
+  setupTokenExpires DateTime? @map("setup_token_expires")
+  sessionToken      String?   @map("session_token") @db.VarChar(255)
+  lastLogin         DateTime? @map("last_login")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@map("vip_users")
+}
+
+// ----------------------------------------------------
+// 18. City VIP Assignments
+// ----------------------------------------------------
+model CityVipAssignment {
+  id                 String    @id @db.VarChar(64)
+  type               String    @default("city") @db.VarChar(50)
+  cityName           String?   @map("city_name") @db.VarChar(100)
+  citySlug           String?   @map("city_slug") @db.VarChar(100)
+  stateName          String?   @map("state_name") @db.VarChar(100)
+  email              String    @db.VarChar(255)
+  phone              String?   @db.VarChar(50)
+  status             String    @default("active") @db.VarChar(50)
+  assignedBy         String?   @map("assigned_by") @db.VarChar(100)
+  assignedAt         DateTime  @map("assigned_at")
+  expiresAt          DateTime  @map("expires_at")
+  lastReminderSentAt DateTime? @map("last_reminder_sent_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  @@index([citySlug])
+  @@index([email])
+  @@index([status])
+  @@map("city_vip_assignments")
+}
+
+// ----------------------------------------------------
+// 19. VIP Phone Overrides
+// ----------------------------------------------------
+model VipPhoneOverride {
+  id        String   @id @db.VarChar(64)
+  city      String   @db.VarChar(100)
+  phone     String   @db.VarChar(50)
+  vipEmail  String   @map("vip_email") @db.VarChar(255)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([city])
+  @@map("vip_phone_overrides")
+}
+
+// ----------------------------------------------------
+// 20. 404 Logs
+// ----------------------------------------------------
+model NotFoundLog {
+  id        String   @id @db.VarChar(64)
+  path      String   @unique(map: "path_1") @db.VarChar(500)
+  hits      Int      @default(1)
+  firstSeen DateTime @map("first_seen")
+  lastSeen  DateTime @map("last_seen")
+  referrers Json?
+  userAgent String?  @map("user_agent") @db.Text
+  ip        String?  @db.VarChar(100)
+  resolved  Boolean  @default(false)
+
+  @@index([lastSeen], map: "lastSeen_-1")
+  @@index([hits], map: "hits_-1")
+  @@index([resolved], map: "resolved_1")
+  @@map("not_found_logs")
+}
+
+// ----------------------------------------------------
+// 21. Rate Limits
+// ----------------------------------------------------
+model RateLimit {
+  id       String   @id @db.VarChar(255)
+  hits     Int      @default(1)
+  expireAt DateTime @map("expire_at")
+
+  @@index([expireAt], map: "expireAt_1")
+  @@map("rate_limits")
+}
+
+// ----------------------------------------------------
+// 22. App Settings & State Metadata
+// ----------------------------------------------------
+model AppSetting {
+  key       String   @id @db.VarChar(100)
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
