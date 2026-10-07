@@ -1,57 +1,53 @@
-# Rojlo Hostinger Deployment Guide
+# Rojlo Hostinger Deployment
 
 ## Stack
-- **Framework**: Next.js 16.3.4 (App Router)
-- **Runtime**: Node.js (>= 20.9.0 LTS recommended, Node 20.x or 22.x)
-- **Language**: TypeScript 5
-- **Database**: MariaDB / MySQL (via Prisma ORM 6.4.1) & MongoDB (fallback)
-- **Production Server**: Node.js standalone server / Next.js production server
+Next.js + Node.js + TypeScript
+
+- Framework: Next.js 16.3.4 (App Router)
+- Runtime: Node.js (>= 20.9.0 LTS recommended, Node 20.x or 22.x)
+- Language: TypeScript 5
+- Database: MariaDB / MySQL (via Prisma ORM 6.4.1) & MongoDB (fallback)
+- Production Server: Node.js standalone server / Next.js production server
 
 ## Repository
-`https://github.com/rojloofficial/rojlo`
+https://github.com/rojloofficial/rojlo
 
 ## Branch
-`main`
+main
 
-## Node.js Version
-- **Recommended**: **Node.js 20 LTS** (minimum `>= 20.9.0` required by Next.js 16.3.4).
-- Alternatively: Node.js 22 LTS.
-- Defined in `package.json`: `"engines": { "node": ">=20.9.0" }`.
+## Hostinger Application Type
+Node.js Web App
 
-## Application Type
-**Hostinger Node.js Web App**  
 *(Do NOT use standard PHP Web Hosting / Composer Git deployment).*
 
+## Node.js Version
+Node.js 20.x LTS (minimum `>= 20.9.0` required by Next.js 16.3.4). Node 22.x LTS is also compatible.
+
+## Framework
+Next.js
+
 ## Root Directory
-- **Application Root**: `/home/<user>/domains/rojlo.in/public_html` (or subfolder path configured in Hostinger Node.js Web App manager, e.g., `/home/<user>/public_html` or repository root).
+`/home/<user>/domains/rojlo.in/public_html` (or repository root configured in Hostinger Node.js Web App manager)
 
 ## Install Command
-```bash
-npm install
-```
-*(Automatically triggers `postinstall: prisma generate` to build Prisma client).*
+`npm install`
+
+*(Automatically triggers `postinstall: prisma generate` to build the Prisma client).*
 
 ## Build Command
-```bash
-npm run build
-```
+`npm run build`
+
 *(Compiles the Next.js production application with Turbopack and builds `.next/standalone`).*
 
 ## Start Command
-```bash
-npm start
-```
-*(Or if using PM2 / standalone server: `node .next/standalone/server.js`).*
+`npm start`
 
-## Port Handling
-- Next.js automatically listens on `process.env.PORT` when started via `npm start` or `node .next/standalone/server.js`.
-- If Hostinger dynamically assigns an internal port (e.g. `PORT=3000` or random unprivileged port for reverse-proxying via LiteSpeed / Nginx), the application automatically binds to that port.
-- In `ecosystem.config.cjs`, `PORT: process.env.PORT || 3000` is configured.
+*(Or if using PM2 / standalone runner: `node .next/standalone/server.js`).*
 
 ## Environment Variables
-Set the following environment variables in the Hostinger Node.js Web App settings:
+Set the following environment variable names in the Hostinger Node.js Web App configuration:
 
-### Server-Only Variables (Private)
+### Server-Only Variables (Confidential)
 - `NODE_ENV=production`
 - `PORT=3000` (or assigned port)
 - `DATABASE_URL` — MariaDB connection string: `mysql://DB_USER:DB_PASSWORD@localhost:3306/DB_NAME`
@@ -77,63 +73,75 @@ Set the following environment variables in the Hostinger Node.js Web App setting
 - `DEFAULT_UPI_QR` — Fallback UPI QR image URL
 
 ### Client-Exposed Variables (`NEXT_PUBLIC_*`)
-*(Note: These must be set before running `npm run build` so Next.js can inline them into static chunks)*
+*(Must be set before running `npm run build` so Next.js can inline them into static bundles)*
 - `NEXT_PUBLIC_SITE_NAME=Rojlo`
 - `NEXT_PUBLIC_SITE_URL=https://rojlo.in`
 - `NEXT_PUBLIC_VIP_URL=https://rojlo.in/vip/login`
 - `NEXT_PUBLIC_GA_MEASUREMENT_ID` — Google Analytics Measurement ID
 
-## Database Configuration (MariaDB on Hostinger)
-1. In Hostinger hPanel, go to **Databases** &rarr; **Management**.
-2. Create a new MySQL/MariaDB database (e.g., `u123456789_rojlo`).
-3. Create a database user and assign a secure password.
-4. Note your database credentials:
-   - Host: `localhost` (or `127.0.0.1:3306`)
-   - User: `u123456789_user`
-   - Password: `YourSecretPassword`
-   - Database name: `u123456789_rojlo`
-5. Construct the `DATABASE_URL`:
-   ```text
-   mysql://u123456789_user:YourSecretPassword@localhost:3306/u123456789_rojlo
-   ```
-6. Push the Prisma schema tables to MariaDB using the Hostinger SSH Terminal:
-   ```bash
-   npx prisma db push
-   ```
+## Database
+Required production configuration:
+- Database System: MariaDB / MySQL on Hostinger.
+- Connection String format:
+  ```text
+  DATABASE_URL="mysql://u123456789_user:YourSecretPassword@localhost:3306/u123456789_rojlo"
+  ```
+- Schema Initialization: Run `npx prisma db push` via Hostinger SSH Terminal to create all 22 relational tables according to `prisma/schema.prisma`.
+- No database migration was forced, and existing models preserve MongoDB/in-memory fallback when MariaDB is not yet connected.
 
-## Production Domain
-- Domain: **`https://rojlo.in`**
-- SSL: Ensure Free Let's Encrypt SSL is active in Hostinger hPanel under **Security** &rarr; **SSL**.
+## Domain
+https://rojlo.in
+
+- Free Let's Encrypt SSL active under Hostinger hPanel &rarr; Security &rarr; SSL.
 - Force HTTPS enabled.
+- Canonical URLs and sitemap resolve to `https://rojlo.in`.
 
-## Deployment Procedure (Step-by-Step in Hostinger)
+## 403 Root Cause
+### Confirmed Cause:
+1. Hostinger's standard "Git" deployment tool under shared hosting defaults to deploying **PHP / Composer** applications.
+2. The deployment log confirmed this behavior:
+   ```text
+   INFO: Installing Composer dependencies
+   INFO: Publishing
+   INFO: Publishing completed
+   ```
+3. Hostinger published the repository into `public_html` expecting an `index.php` or `index.html`.
+4. Because Next.js is a Node.js server application with no static `index.html` or `index.php` in the root folder, Apache/LiteSpeed attempted to display a directory index.
+5. Because directory browsing is disabled on Hostinger servers for security, the server returned:
+   ```text
+   403 Forbidden - Access to this resource on the server is denied!
+   ```
+6. The Node.js server was **never started**, `npm install` was never executed, and `npm run build` was never called by Hostinger.
+7. **Conclusion**: The application source code is NOT broken. The 403 error is 100% caused by Hostinger deployment type/configuration.
 
-### Option A: Using Hostinger "Node.js" Application Manager (hPanel)
-1. Log in to Hostinger hPanel for `rojlo.in`.
-2. Navigate to **Websites** &rarr; select `rojlo.in` &rarr; locate **Node.js** under **Advanced** or **Websites**.
-3. Create or Configure the Node.js application:
+## Hostinger Fix
+### Step-by-Step Instructions to Deploy via Hostinger Node.js Web App:
+1. Log into **Hostinger hPanel** (`hpanel.hostinger.com`).
+2. Go to **Websites** &rarr; select **`rojlo.in`**.
+3. In the sidebar or search bar, look for **Node.js** (under *Advanced* or *Websites*).
+   *(If your plan is shared hosting without the Node.js menu, use SSH/VPS access or upgrade to Cloud/VPS hosting).*
+4. Under Node.js application management, click **Create Application**:
    - **Node.js version**: Choose `20.x` LTS.
    - **Application mode**: `Production`.
-   - **Application root**: Path to repository files (e.g. `/home/uXXXX/domains/rojlo.in/public_html`).
-   - **Application startup file**: `node_modules/next/dist/bin/next` or point to a custom startup runner / PM2 `ecosystem.config.cjs`.
-   - Or configure NPM Scripts:
-     - Install: `npm install`
-     - Build: `npm run build`
-     - Start: `npm start`
-4. Set the **Environment Variables** in the Node.js app dashboard or in `.env.production`.
-5. Run Build and Start the application.
+   - **Application root**: Path to repository files (e.g. `/home/uXXXXX/domains/rojlo.in/public_html`).
+   - **Application startup file**: `node_modules/next/dist/bin/next` with argument `start` OR configure scripts:
+     - Install command: `npm install`
+     - Build command: `npm run build`
+     - Start command: `npm start`
+5. Click **Environment Variables** and enter the production variables listed above.
+6. Click **Run Build** (`npm run build`).
+7. Click **Start / Restart Application**.
 
-### Option B: Using Hostinger VPS / Cloud or SSH Terminal (PM2)
-If your Hostinger plan includes SSH/Terminal access:
-1. SSH into the server:
+### Alternative Fix via SSH / PM2 (VPS / Cloud / Business Plan with Terminal):
+1. Connect via SSH:
    ```bash
    ssh uXXXXXX@rojlo.in -p 65002
    ```
-2. Navigate to your website folder:
+2. Navigate to project root:
    ```bash
    cd ~/domains/rojlo.in/public_html
    ```
-3. Pull the latest code:
+3. Pull latest code:
    ```bash
    git pull origin main
    ```
@@ -141,43 +149,21 @@ If your Hostinger plan includes SSH/Terminal access:
    ```bash
    npm install
    ```
-5. Build the application:
+5. Build production bundle:
    ```bash
    npm run build
    ```
-6. Start or restart using PM2:
+6. Start cluster with PM2:
    ```bash
-   pm2 restart ecosystem.config.cjs || pm2 start ecosystem.config.cjs
+   pm2 start ecosystem.config.cjs
    pm2 save
    ```
 
-## Git Deployment (Automated Redeployment)
-1. Every push to GitHub branch `main` updates `git@github.com:rojloofficial/rojlo.git`.
-2. In Hostinger Git deployment or via a GitHub Actions webhook / SSH action:
-   - Set the webhook to pull the latest commit from `main`.
-   - Ensure the post-receive hook executes:
-     ```bash
-     npm install
-     npm run build
-     pm2 reload ecosystem.config.cjs
-     ```
-
-## Troubleshooting: Root Cause of 403 Forbidden
-### The Observed Problem:
-When you initially deployed via Hostinger's Git tool, the log showed:
-```text
-INFO: Cloning https://github.com/rojloofficial/rojlo.git (branch: main)
-INFO: Cloning completed
-INFO: Installing Composer dependencies
-INFO: Installing completed
-INFO: Publishing
-INFO: Publishing completed
-Result: 403 Forbidden
-```
-
-### Confirmed Cause:
-1. **Wrong Application Engine**: Hostinger's standard "Git" tool under the shared hosting panel defaults to **PHP/Composer** hosting.
-2. It looked for PHP files, attempted to run `composer install`, and published the source tree directly to `public_html` without starting a Node process.
-3. Because Next.js is a server-rendered JavaScript application with no `index.php` or static `index.html` in the root folder, Apache/LiteSpeed web server was requested to serve an empty directory index.
-4. Since directory listing is disabled on Hostinger for security, the web server returned **`403 Forbidden`**.
-5. **Conclusion**: The repository source code was NOT broken. The 403 was 100% caused by Hostinger deploying this project as a PHP application instead of a **Node.js Web App**.
+## Redeployment
+To redeploy when pushing new changes to GitHub:
+1. Push your changes to `https://github.com/rojloofficial/rojlo` branch `main`.
+2. In Hostinger Node.js Web App dashboard, click **Redeploy** or **Restart**.
+3. If using SSH / terminal, run:
+   ```bash
+   git pull origin main && npm install && npm run build && pm2 reload ecosystem.config.cjs
+   ```
