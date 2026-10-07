@@ -212,7 +212,7 @@ export function sendVipInviteEmail({
 
   const envVipUrl = cleanEnv(process.env.VIP_LOGIN_URL || process.env.NEXT_PUBLIC_VIP_URL);
   const effectiveLoginUrl =
-    envVipUrl || (loginUrl ? cleanEnv(loginUrl) : "") || "https://rojloo.vercel.app/vip/login";
+    envVipUrl || (loginUrl ? cleanEnv(loginUrl) : "") || "https://rojlo.in/vip/login";
 
   const text = [
     `Hello,`,

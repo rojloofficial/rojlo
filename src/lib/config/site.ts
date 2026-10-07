@@ -8,7 +8,7 @@ function resolveSiteUrl(): string {
   ) {
     return envUrl.replace(/\/+$/, "");
   }
-  return "https://rojloo.vercel.app";
+  return "https://rojlo.in";
 }
 
 const siteUrl = resolveSiteUrl();

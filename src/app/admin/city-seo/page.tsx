@@ -549,7 +549,7 @@ function CitySeoContent() {
             longTailKeywords: [],
             canonicalUrl:
               canonicalUrl.trim() ||
-              `https://rojloo.vercel.app/places/${finalUrlSlug}`,
+              `https://rojlo.in/places/${finalUrlSlug}`,
             featuredImage: "",
             imageAlt: "",
             content,
@@ -601,7 +601,7 @@ function CitySeoContent() {
           ],
       canonicalUrl:
         canonicalUrl ||
-        `https://rojloo.vercel.app/places/${urlSlug || slugify(cityName)}`,
+        `https://rojlo.in/places/${urlSlug || slugify(cityName)}`,
       featuredImage: featuredImage || "",
       imageAlt: imageAlt || `${cityName} city guide`,
       status: "draft",
@@ -1007,7 +1007,7 @@ function CitySeoContent() {
           longTailKeywords: [],
           canonicalUrl:
             canonicalUrl.trim() ||
-            `https://rojloo.vercel.app/places/${finalUrlSlug}`,
+            `https://rojlo.in/places/${finalUrlSlug}`,
           featuredImage,
           imageAlt,
           content,

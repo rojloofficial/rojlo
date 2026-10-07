@@ -140,7 +140,7 @@ export async function POST(request: NextRequest) {
     await upsertVipUserWithPhone(email, phone);
 
     const envVipUrl = (process.env.VIP_LOGIN_URL || process.env.NEXT_PUBLIC_VIP_URL || "").trim().replace(/^['"]|['"]$/g, "");
-    const loginUrl = envVipUrl || "https://rojloo.vercel.app/vip/login";
+    const loginUrl = envVipUrl || "https://rojlo.in/vip/login";
     const latestExpiry = created[0]?.expiresAt || new Date();
 
     // Send notification email containing VIP login credentials
